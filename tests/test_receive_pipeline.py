@@ -99,11 +99,14 @@ def test_pipeline_drop_rate_with_bad_frames():
             return None
     mb = _MockBackend()
     pipe = ReceivePipeline(backend=mb)
-    mb._queue = [manifest_frame]; pipe.process_image(None)
-    mb._queue = [data_frame]; pipe.process_image(None)
+    mb._queue = [manifest_frame]
+    pipe.process_image(None)
+    mb._queue = [data_frame]
+    pipe.process_image(None)
     assert pipe.valid_frames == 2
     assert pipe.bad_frames == 0
     # 注入坏 bytes（MAGIC 不匹配）→ decode_frame 抛 ProtocolError → 计入 bad
-    mb._queue = [b"\x00" * 30]; pipe.process_image(None)
+    mb._queue = [b"\x00" * 30]
+    pipe.process_image(None)
     assert pipe.bad_frames == 1
     assert abs(pipe.drop_rate - 1 / 3) < 1e-9   # 1 bad / 3 total
