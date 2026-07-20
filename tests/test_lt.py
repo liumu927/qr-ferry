@@ -8,7 +8,7 @@ import random
 import pytest
 
 from qrferry.core.lt import (
-    DIST_RSD, DIST_ISD, DIST_DEGENERATE,
+    DIST_RSD, DIST_ISD,
     LtEncoder, LtDecoder, _build_degree_cdf,
 )
 

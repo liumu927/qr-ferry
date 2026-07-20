@@ -13,9 +13,9 @@ import cv2
 import numpy as np
 from PIL import Image
 from PySide6.QtCore import Qt, QPointF, QRect, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QImage, QPainter, QPixmap, QPolygonF
+from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
-    QButtonGroup, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QButtonGroup, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel,
     QMainWindow, QMessageBox, QProgressBar, QPushButton, QSpinBox, QTabWidget,
     QTextEdit, QVBoxLayout, QWidget)
 
