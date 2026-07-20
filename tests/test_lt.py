@@ -124,3 +124,31 @@ def test_oversized_block_rejected():
     """block_size 过大（XOR_DATA 单独超 QR 容量）应在构造时报错。"""
     with pytest.raises(ValueError):
         LtEncoder([b"\x00" * 4096, b"\x00" * 4096], session_id=1)
+
+
+def test_missing_indices_shrink_as_blocks_resolve():
+    """degree=1 符号直接 resolve 一个块，missing 立即移除该索引。"""
+    dec = LtDecoder(5, 4)
+    assert dec.missing_indices == [0, 1, 2, 3, 4]
+    dec.add_symbol((2,), b"\x00\x00\x00\x00")   # 任意外容，仅验证槽位被填
+    assert dec.resolved_count == 1
+    assert dec.missing_indices == [0, 1, 3, 4]
+    assert 2 not in dec.missing_indices
+
+
+def test_missing_indices_empty_when_complete():
+    """round-trip 过程中 missing_indices 单调收敛，完成时为空。"""
+    K, C = 8, 16
+    original = _blocks(K, C)
+    enc = LtEncoder(original, session_id=3, dist=DIST_ISD)
+    dec = LtDecoder(K, C)
+    last_missing = K
+    for sid in range(K * 4):
+        _d, adj, xd = enc.encode_symbol(sid)
+        dec.add_symbol(adj, xd)
+        assert len(dec.missing_indices) <= last_missing   # 单调不增
+        last_missing = len(dec.missing_indices)
+        if dec.is_complete:
+            break
+    assert dec.is_complete
+    assert dec.missing_indices == []

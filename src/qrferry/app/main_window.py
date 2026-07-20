@@ -394,6 +394,12 @@ class MainWindow(QMainWindow):
         top.addWidget(self._cam_label, 1)
         lay.addLayout(top, 1)
         self._r_progress = QProgressBar(); self._r_progress.setValue(0); lay.addWidget(self._r_progress)
+        # 缺块明细：传输中展示仍未恢复的源块索引，缺 0 块或未开始时隐藏
+        self._r_missing = QLabel("")
+        self._r_missing.setStyleSheet("color:#DC2626; font-size:12px;")
+        self._r_missing.setWordWrap(True)
+        self._r_missing.hide()
+        lay.addWidget(self._r_missing)
         self._r_result = QTextEdit(); self._r_result.setReadOnly(True)
         self._r_result.setPlaceholderText("接收完成后，文本显示于此（可复制）；文件显示保存路径。")
         self._r_result.setMaximumHeight(120)
@@ -437,6 +443,21 @@ class MainWindow(QMainWindow):
         vp = self._r_result.viewport()
         self._r_count.move(vp.width() - self._r_count.width() - 10, vp.height() - self._r_count.height() - 8)
         self._r_count.raise_()
+
+    def _update_r_missing(self):
+        """刷新缺块明细：传输中展示未恢复源块索引，缺 0 块或已完成时隐藏。"""
+        if not hasattr(self, "_r_missing"):
+            return
+        pipe = self._pipe
+        missing = pipe.missing_indices if (pipe is not None and not pipe.is_complete) else []
+        if not missing:
+            self._r_missing.hide()
+            self._r_missing.setText("")
+            return
+        shown = missing[:20]
+        suffix = " …" if len(missing) > 20 else ""
+        self._r_missing.setText(f"缺 {len(missing)} 块: {shown}{suffix}")
+        self._r_missing.show()
 
     def eventFilter(self, obj, event):
         from PySide6.QtCore import QEvent
@@ -576,6 +597,7 @@ class MainWindow(QMainWindow):
         self._r_progress.setValue(0)
         self._r_result.clear()
         self._update_r_count()
+        self._update_r_missing()
         self._r_start.setText("停止接收")
         self._recv_timer.start(int(1000 / self._r_fps.value()))
         self.statusBar().showMessage("接收中…")
@@ -606,6 +628,7 @@ class MainWindow(QMainWindow):
             return
         self._r_progress.setValue(int(self._pipe.progress * 100))
         self._update_r_count()
+        self._update_r_missing()
         self.statusBar().showMessage(f"进度 {self._pipe.progress:.0%}")
         if self._pipe.result is not None:
             self._on_received()

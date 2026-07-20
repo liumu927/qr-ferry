@@ -51,6 +51,10 @@ class ReceivePipeline:
         return self.session.progress
 
     @property
+    def missing_indices(self) -> list[int]:
+        return self.session.missing_indices
+
+    @property
     def is_complete(self) -> bool:
         return self.session.is_complete
 

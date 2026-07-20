@@ -155,6 +155,11 @@ class LtDecoder:
         return sum(1 for b in self.resolved if b is not None)
 
     @property
+    def missing_indices(self) -> list[int]:
+        """仍未恢复的源块索引（升序）；供接收端缺块可视化。"""
+        return [i for i, b in enumerate(self.resolved) if b is None]
+
+    @property
     def is_complete(self) -> bool:
         return self.resolved_count >= self.K
 

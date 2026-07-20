@@ -62,3 +62,44 @@ def test_receive_count_text_complete_uses_chars_not_bytes(qapp):
     w._r_result.setPlainText("你好ABC")   # 5 字符 / UTF-8 9 字节
     w._update_r_count()
     assert w._r_count.text() == "5 字符"
+
+
+def test_receive_missing_shown_when_blocks_missing(qapp):
+    """传输中存在未恢复块：缺块明细可见并展示索引。"""
+    w = MainWindow()
+    session = type("S", (), {"manifest": type("M", (), {"total_chunks": 10})()})()
+    w._pipe = type("P", (), {
+        "session": session, "result": None, "progress": 0.2,
+        "missing_indices": [3, 7], "is_complete": False,
+    })()
+    w._update_r_missing()
+    assert w._r_missing.text() == "缺 2 块: [3, 7]"
+    assert not w._r_missing.isHidden()
+
+
+def test_receive_missing_hidden_when_no_missing(qapp):
+    """无缺块（未开始或已完成）：明细隐藏且文本清空。"""
+    w = MainWindow()
+    session = type("S", (), {"manifest": None})()
+    w._pipe = type("P", (), {
+        "session": session, "result": None, "progress": 0.0,
+        "missing_indices": [], "is_complete": False,
+    })()
+    w._update_r_missing()
+    assert w._r_missing.isHidden()
+    assert w._r_missing.text() == ""
+
+
+def test_receive_missing_truncates_long_list(qapp):
+    """缺块超过 20 个：仅显示前 20 个索引并追加省略号。"""
+    w = MainWindow()
+    session = type("S", (), {"manifest": type("M", (), {"total_chunks": 100})()})()
+    w._pipe = type("P", (), {
+        "session": session, "result": None, "progress": 0.0,
+        "missing_indices": list(range(25)), "is_complete": False,
+    })()
+    w._update_r_missing()
+    text = w._r_missing.text()
+    assert text.startswith("缺 25 块: [")
+    assert text.endswith("…")          # 超过 20 个时以省略号结尾
+    assert "20" not in text            # 第 21 个及之后的索引不展示

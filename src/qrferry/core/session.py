@@ -46,6 +46,11 @@ class ReceiveSession:
             return 0.0
         return self._decoder.resolved_count / self.K
 
+    @property
+    def missing_indices(self) -> list[int]:
+        """仍未恢复的源块索引；会话未建立（MANIFEST 未到）时为空。"""
+        return self._decoder.missing_indices if self._decoder is not None else []
+
     # ── 帧路由 ──
     def ingest(self, header: FrameHeader, payload: bytes) -> None:
         """按 FRAME_TYPE 路由；未知会话或坏 payload 一律静默忽略。"""
