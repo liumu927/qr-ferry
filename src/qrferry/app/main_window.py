@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import random
 import sys
+import time
 
 import cv2
 import numpy as np
@@ -418,6 +419,11 @@ class MainWindow(QMainWindow):
         self._r_missing.setWordWrap(True)
         self._r_missing.hide()
         lay.addWidget(self._r_missing)
+        # 链路统计：有效/丢弃/丢弃率/耗时，完成时追加吞吐量
+        self._r_stats = QLabel("")
+        self._r_stats.setStyleSheet("color:#64748B; font-size:12px;")
+        self._r_stats.hide()
+        lay.addWidget(self._r_stats)
         self._r_result = QTextEdit(); self._r_result.setReadOnly(True)
         self._r_result.setPlaceholderText("接收完成后，文本显示于此（可复制）；文件显示保存路径。")
         self._r_result.setMaximumHeight(120)
@@ -461,6 +467,24 @@ class MainWindow(QMainWindow):
         vp = self._r_result.viewport()
         self._r_count.move(vp.width() - self._r_count.width() - 10, vp.height() - self._r_count.height() - 8)
         self._r_count.raise_()
+
+    def _update_r_stats(self):
+        """刷新链路统计：有效/丢弃/丢弃率/耗时，完成时追加吞吐量。"""
+        if not hasattr(self, "_r_stats"):
+            return
+        pipe = self._pipe
+        if pipe is None or pipe.session.manifest is None:
+            self._r_stats.hide()
+            self._r_stats.setText("")
+            return
+        elapsed = max(1e-6, time.time() - getattr(self, "_recv_start_ts", time.time()))
+        text = (f"有效 {pipe.valid_frames} · 丢弃 {pipe.bad_frames} "
+                f"({pipe.drop_rate:.1%}) · 已用 {elapsed:.1f}s")
+        if pipe.is_complete and pipe.result is not None:
+            throughput = len(pipe.result.data) / elapsed / 1024.0
+            text += f" · {throughput:.1f} KB/s"
+        self._r_stats.setText(text)
+        self._r_stats.show()
 
     def _update_r_missing(self):
         """刷新缺块明细：传输中展示未恢复源块索引，缺 0 块或已完成时隐藏。"""
@@ -675,10 +699,12 @@ class MainWindow(QMainWindow):
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         resumed = self._probe_resume()
         self._pipe = ReceivePipeline(save_dir=self._r_dir.fullText(), resume_from=resumed)
+        self._recv_start_ts = time.time()
         self._r_progress.setValue(0)
         self._r_result.clear()
         self._update_r_count()
         self._update_r_missing()
+        self._update_r_stats()
         self._r_start.setText("停止接收")
         self._recv_timer.start(int(1000 / self._r_fps.value()))
         self.statusBar().showMessage("接收中…")
@@ -710,6 +736,7 @@ class MainWindow(QMainWindow):
         self._r_progress.setValue(int(self._pipe.progress * 100))
         self._update_r_count()
         self._update_r_missing()
+        self._update_r_stats()
         self.statusBar().showMessage(f"进度 {self._pipe.progress:.0%}")
         if self._pipe.result is not None:
             self._on_received()
@@ -724,6 +751,7 @@ class MainWindow(QMainWindow):
             self._r_result.setPlainText(f"文件已保存：{r.path}")
             self.statusBar().showMessage(f"文件接收完成：{r.path}")
         self._update_r_count()
+        self._update_r_stats()
 
     def _copy_result(self):
         from PySide6.QtWidgets import QApplication

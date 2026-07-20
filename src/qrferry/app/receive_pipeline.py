@@ -49,6 +49,8 @@ class ReceivePipeline:
         self.result: ReceiveResult | None = None
         self._persist = persist
         self._ingested_since_save = 0
+        self.valid_frames = 0          # 有效帧数（CRC 通过并入会话）
+        self.bad_frames = 0            # 丢弃帧数（CRC 失败/解析失败）
         if persist and resume_from is not None and resume_from.to_snapshot() is not None:
             session_store.save(self.session, save_dir)   # 恢复后立即落盘，固化种子
 
@@ -61,6 +63,12 @@ class ReceivePipeline:
         return self.session.missing_indices
 
     @property
+    def drop_rate(self) -> float:
+        """丢弃率 = bad_frames / (valid+bad)，链路质量指标。"""
+        total = self.valid_frames + self.bad_frames
+        return self.bad_frames / total if total else 0.0
+
+    @property
     def is_complete(self) -> bool:
         return self.session.is_complete
 
@@ -71,9 +79,11 @@ class ReceivePipeline:
             try:
                 header, payload = decode_frame(raw)
             except ProtocolError:
-                continue   # CRC 失败/坏帧：丢弃
+                self.bad_frames += 1   # CRC 失败/坏帧：丢弃但计数
+                continue
             self.session.ingest(header, payload)
             added += 1
+        self.valid_frames += added
         if self.session.is_complete and not self._finalized:
             self._finalize()
         elif self._persist and added > 0:

@@ -68,3 +68,42 @@ def test_blank_image_yields_zero_and_no_crash():
     blank = Image.new("L", (200, 200), 255)
     assert pipe.process_image(blank) == 0
     assert not pipe.is_complete
+
+
+def test_pipeline_counts_valid_frames_in_round_trip():
+    data = _rand(2000, 2)
+    sender = SendController(data, ContentType.FILE, "f.bin", session_id=1,
+                            config=SenderConfig(chunk_size_log=6, rounds=1))
+    pipe = ReceivePipeline(backend=StandardQrBackend())
+    _drive(sender, pipe)
+    assert pipe.is_complete
+    assert pipe.valid_frames > 0
+    assert pipe.bad_frames == 0      # 合成 QR 无坏帧
+    assert pipe.drop_rate == 0.0
+
+
+def test_pipeline_drop_rate_with_bad_frames():
+    """CRC 失败帧计入 bad_frames，drop_rate = bad/(valid+bad)。"""
+    from qrferry.core.frame import FrameType, decode_frame
+    data = _rand(1500, 1)
+    sender = SendController(data, ContentType.FILE, "f.bin", session_id=1,
+                            config=SenderConfig(chunk_size_log=6, rounds=1))
+    frames = list(sender)
+    manifest_frame = next(f for f in frames if decode_frame(f)[0].frame_type == FrameType.MANIFEST)
+    data_frame = next(f for f in frames if decode_frame(f)[0].frame_type == FrameType.DATA)
+
+    class _MockBackend:
+        def decode(self, image):
+            return self._queue
+        def encode(self, *a, **k):
+            return None
+    mb = _MockBackend()
+    pipe = ReceivePipeline(backend=mb)
+    mb._queue = [manifest_frame]; pipe.process_image(None)
+    mb._queue = [data_frame]; pipe.process_image(None)
+    assert pipe.valid_frames == 2
+    assert pipe.bad_frames == 0
+    # 注入坏 bytes（MAGIC 不匹配）→ decode_frame 抛 ProtocolError → 计入 bad
+    mb._queue = [b"\x00" * 30]; pipe.process_image(None)
+    assert pipe.bad_frames == 1
+    assert abs(pipe.drop_rate - 1 / 3) < 1e-9   # 1 bad / 3 total

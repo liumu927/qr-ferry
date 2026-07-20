@@ -114,3 +114,40 @@ def test_resend_without_session_warns(qapp, monkeypatch):
     monkeypatch.setattr(QMessageBox, "warning", lambda *a: called.append(a))
     w._resend()
     assert called   # 弹了提示，未进入补发分支
+
+
+def test_receive_stats_displays_valid_and_dropped(qapp):
+    """传输中统计行展示有效/丢弃/丢弃率。"""
+    w = MainWindow()
+    manifest = type("M", (), {"raw_size": 1000, "total_chunks": 5})()
+    session = type("S", (), {"manifest": manifest})()
+    w._pipe = type("P", (), {
+        "session": session, "result": None, "progress": 0.4,
+        "missing_indices": [], "is_complete": False,
+        "valid_frames": 50, "bad_frames": 5, "drop_rate": 5 / 55,
+    })()
+    w._recv_start_ts = 0.0
+    w._update_r_stats()
+    text = w._r_stats.text()
+    assert "有效 50" in text
+    assert "丢弃 5" in text
+    assert "9.1%" in text            # 5/55 ≈ 9.09% → :.1% = "9.1%"
+    assert not w._r_stats.isHidden()
+
+
+def test_receive_stats_shows_throughput_when_complete(qapp):
+    """完成时统计行追加吞吐量（KB/s）。"""
+    w = MainWindow()
+    manifest = type("M", (), {"raw_size": 2048})()
+    session = type("S", (), {"manifest": manifest})()
+    result = type("R", (), {"data": b"x" * 2048, "path": "/tmp/f"})()
+    w._pipe = type("P", (), {
+        "session": session, "result": result, "progress": 1.0,
+        "missing_indices": [], "is_complete": True,
+        "valid_frames": 100, "bad_frames": 0, "drop_rate": 0.0,
+    })()
+    w._recv_start_ts = 0.0
+    w._update_r_stats()
+    text = w._r_stats.text()
+    assert "有效 100" in text
+    assert "KB/s" in text            # 完成时显示吞吐量
