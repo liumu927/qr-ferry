@@ -124,6 +124,6 @@ M4 可靠性增强与 M5 链路统计已完成；M3 协议一致性 fixtures 已
 优先级：
 
 1. 建立真实 PC -> PC 测试矩阵（FPS/ECC/网格/距离/亮度），量化吞吐与完成率，验证人工补发与断点续传在真实丢帧下的有效性。
-2. 基于 `tests/fixtures/protocol/protocol_v1.json` 在 Android Studio 中实现 Kotlin 接收端，逐字节对照协议（M3 本体）。
+2. 基于 `tests/fixtures/protocol/protocol_v1.json` 在 Android Studio 中实现 Kotlin 接收端，逐字节对照协议（M3 本体）；实施蓝图见 `docs/android-implementation-plan.md`。
 3. 补齐 M5 调参向导（基于统计的参数推荐）与彩色 QR。
 
