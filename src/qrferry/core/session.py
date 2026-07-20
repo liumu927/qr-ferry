@@ -10,6 +10,8 @@
 """
 from __future__ import annotations
 
+import base64
+
 from qrferry.core import chunker, lt
 from qrferry.core.frame import (
     Compression, ContentType, DataPayload, EndPayload, FrameHeader, FrameType,
@@ -113,3 +115,31 @@ class ReceiveSession:
             raise RuntimeError("会话未完成，无法重组")
         blocks = self._decoder.get_blocks()
         return chunker.join(blocks, total_size=self.manifest.encoded_size)
+
+    # ── 断点续传 ──
+    def to_snapshot(self) -> dict | None:
+        """导出可 JSON 序列化的快照；会话未建立（MANIFEST 未到）时返回 None。"""
+        if self.manifest is None or self._decoder is None:
+            return None
+        return {
+            "session_id": self.session_id,
+            "manifest_b64": base64.b64encode(self.manifest.pack()).decode("ascii"),
+            "resolved": [base64.b64encode(b).decode("ascii") if b is not None else None
+                         for b in self._decoder.resolved],
+            "ended": self._ended,
+        }
+
+    @classmethod
+    def from_snapshot(cls, snap: dict) -> "ReceiveSession":
+        """从快照重建会话：恢复 manifest 与已解出的源块（作为 peeling 种子）。"""
+        m = ManifestPayload.unpack(base64.b64decode(snap["manifest_b64"]))
+        block_size = 1 << m.chunk_size_log
+        sess = cls()
+        sess.session_id = snap["session_id"]
+        sess.manifest = m
+        sess._decoder = lt.LtDecoder(m.total_chunks, block_size)
+        resolved = [base64.b64decode(b) if b is not None else None
+                    for b in snap["resolved"]]
+        sess._decoder.seed_resolved(resolved)
+        sess._ended = bool(snap.get("ended", False))
+        return sess

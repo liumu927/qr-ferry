@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from qrferry.core.frame import Compression, ContentType, ProtocolError, decode_frame
 from qrferry.core.session import ReceiveSession
 from qrferry.qr.backend import CodecBackend, StandardQrBackend
+from qrferry.app import session_store
 
 __all__ = ["ReceiveResult", "ReceivePipeline", "safe_filename"]
 
@@ -39,12 +40,17 @@ class ReceivePipeline:
     """接收端核心：喂入图像，自动解码并累积，完成后产出结果。"""
 
     def __init__(self, session: ReceiveSession | None = None,
-                 backend: CodecBackend | None = None, save_dir: str = "."):
-        self.session = session or ReceiveSession()
+                 backend: CodecBackend | None = None, save_dir: str = ".",
+                 resume_from: ReceiveSession | None = None, persist: bool = True):
+        self.session = session or resume_from or ReceiveSession()
         self.backend = backend or StandardQrBackend()
         self.save_dir = save_dir
         self._finalized = False
         self.result: ReceiveResult | None = None
+        self._persist = persist
+        self._ingested_since_save = 0
+        if persist and resume_from is not None and resume_from.to_snapshot() is not None:
+            session_store.save(self.session, save_dir)   # 恢复后立即落盘，固化种子
 
     @property
     def progress(self) -> float:
@@ -70,7 +76,16 @@ class ReceivePipeline:
             added += 1
         if self.session.is_complete and not self._finalized:
             self._finalize()
+        elif self._persist and added > 0:
+            self._maybe_save(added)
         return added
+
+    def _maybe_save(self, added: int) -> None:
+        """节流持久化：每累计 16 个有效帧存一次，避免每帧 IO。"""
+        self._ingested_since_save += added
+        if self._ingested_since_save >= 16:
+            self._ingested_since_save = 0
+            session_store.save(self.session, self.save_dir)
 
     def _finalize(self) -> None:
         m = self.session.manifest
@@ -92,3 +107,5 @@ class ReceivePipeline:
                 f.write(data)
             self.result = ReceiveResult(m.content_type, m.filename, data, path)
         self._finalized = True
+        if self._persist:
+            session_store.clear(self.save_dir)   # 传输完成，清理续传快照

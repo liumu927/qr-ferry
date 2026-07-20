@@ -210,3 +210,16 @@ class LtDecoder:
     def get_blocks(self) -> list[bytes]:
         """返回已恢复的源块列表（未完成时含 None）。"""
         return list(self.resolved)   # type: ignore[return-value]
+
+    def seed_resolved(self, blocks: list[bytes | None]) -> None:
+        """注入已恢复的源块作为 peeling 种子（断点续传用）。
+
+        blocks 长度须等于 K；非 None 项填入 self.resolved。不重建 _ripple——
+        后续 add_symbol 会自动用这些 resolved 块消减新符号的 adjacency（见 add_symbol
+        开头），peeling 自然续接，无需重放历史符号。
+        """
+        if len(blocks) != self.K:
+            raise ValueError(f"blocks 长度 {len(blocks)} 与 K={self.K} 不符")
+        for i, b in enumerate(blocks):
+            if b is not None:
+                self.resolved[i] = b

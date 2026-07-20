@@ -118,3 +118,33 @@ def test_malformed_data_payload_is_ignored_without_crash():
     sess.ingest(FrameHeader(FrameType.DATA, session_id=9, symbol_id=2), bad_size.pack())
 
     assert sess.progress == 0.0
+
+
+def test_snapshot_round_trip_resumes_and_completes():
+    """喂部分符号 → snapshot → 重建 → 喂剩余 → 完成且数据一致；resolved 在快照中保留。"""
+    data = (b"hello qr-ferry " * 30)
+    manifest, payloads, encoded, _ = _build_session_frames(data, 4, session_id=42)
+    sess = ReceiveSession()
+    sess.ingest(FrameHeader(FrameType.MANIFEST, session_id=42), manifest.pack())
+    third = len(payloads) // 3
+    for sid, dp in payloads[:third]:
+        sess.ingest(FrameHeader(FrameType.DATA, session_id=42, symbol_id=sid), dp.pack())
+    assert not sess.is_complete, "1/3 符号不应足以完成"
+    before_progress = sess.progress
+    # snapshot → 重建
+    sess2 = ReceiveSession.from_snapshot(sess.to_snapshot())
+    assert sess2.session_id == 42
+    assert sess2.progress == before_progress      # resolved 种子保留
+    assert sess2.missing_indices == sess.missing_indices
+    # 喂剩余符号，应能完成
+    for sid, dp in payloads[third:]:
+        sess2.ingest(FrameHeader(FrameType.DATA, session_id=42, symbol_id=sid), dp.pack())
+        if sess2.is_complete:
+            break
+    assert sess2.is_complete
+    assert sess2.reassemble() == encoded
+
+
+def test_snapshot_none_when_not_started():
+    """会话未建立（MANIFEST 未到）时 to_snapshot 返回 None。"""
+    assert ReceiveSession().to_snapshot() is None

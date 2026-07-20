@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from qrferry.app.receive_pipeline import ReceivePipeline
 from qrferry.app.send_controller import SendController, SenderConfig
 from qrferry.core.frame import ContentType
+from qrferry.core.session import ReceiveSession
 from qrferry.qr.backend import StandardQrBackend
 
 
@@ -597,6 +598,25 @@ class MainWindow(QMainWindow):
         else:
             self._stop_recv()
 
+    def _probe_resume(self) -> ReceiveSession | None:
+        """探测保存目录下是否有未完成会话；有则询问用户是否恢复，否则返回 None。"""
+        from qrferry.app import session_store
+        sess = session_store.load(self._r_dir.fullText())
+        if sess is None or sess.is_complete:
+            return None
+        missing = len(sess.missing_indices)
+        total = sess.K
+        recovered = total - missing
+        msg = (f"检测到未完成的接收（会话 {sess.session_id}）：\n"
+               f"已恢复 {recovered}/{total} 块（{sess.progress:.0%}），"
+               f"剩 {missing} 块待补齐。\n是否继续接收？")
+        choice = QMessageBox.question(
+            self, "断点续传", msg, QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if choice == QMessageBox.Yes:
+            return sess
+        session_store.clear(self._r_dir.fullText())
+        return None
+
     def _start_recv(self):
         idx = self._r_cam.value()
         if sys.platform == "win32":
@@ -617,7 +637,8 @@ class MainWindow(QMainWindow):
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        self._pipe = ReceivePipeline(save_dir=self._r_dir.fullText())
+        resumed = self._probe_resume()
+        self._pipe = ReceivePipeline(save_dir=self._r_dir.fullText(), resume_from=resumed)
         self._r_progress.setValue(0)
         self._r_result.clear()
         self._update_r_count()
