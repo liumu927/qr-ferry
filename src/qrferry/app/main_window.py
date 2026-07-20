@@ -331,6 +331,15 @@ class MainWindow(QMainWindow):
             row.addWidget(w)
             left.addLayout(row)
 
+        # 人工补发：会话存活时可追加 N 个新符号（LT 喷泉码靠新 symbol_id 补缺块，非重发旧帧）
+        extra_row = QHBoxLayout()
+        extra_row.addWidget(QLabel("补发帧数"))
+        self._s_extra = QSpinBox(); self._s_extra.setRange(1, 10000); self._s_extra.setValue(50)
+        extra_row.addWidget(self._s_extra)
+        self._s_resend = QPushButton("补发"); self._s_resend.clicked.connect(self._resend)
+        extra_row.addWidget(self._s_resend)
+        left.addLayout(extra_row)
+
         self._s_start = QPushButton("开始发送")
         self._s_start.setCheckable(True)
         self._s_start.toggled.connect(self._toggle_send)
@@ -527,6 +536,21 @@ class MainWindow(QMainWindow):
         if self._s_start.isChecked():
             self._s_start.setChecked(False)
         self._s_start.setText("开始发送")
+
+    def _resend(self):
+        """人工补发：从当前游标追加 N 个新 DATA 符号（LT 喷泉码靠新符号补缺块，非重发旧帧）。"""
+        if self._send_ctrl is None:
+            QMessageBox.warning(self, "提示", "请先开始一次发送以建立会话")
+            return
+        n = self._s_extra.value()
+        if n <= 0:
+            return
+        self._send_iter = self._send_ctrl.extra_data_frames(n)
+        self._s_start.setText("停止发送")
+        self._s_start.setChecked(True)
+        self._send_timer.start(int(1000 / self._s_fps.value()))
+        self.statusBar().showMessage(
+            f"补发 {n} 个新符号（自 symbol_id={self._send_ctrl.next_sid} 起）")
 
     def _tick_send(self):
         if self._send_iter is None or self._send_ctrl is None:

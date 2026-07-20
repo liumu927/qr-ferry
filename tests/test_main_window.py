@@ -103,3 +103,14 @@ def test_receive_missing_truncates_long_list(qapp):
     assert text.startswith("缺 25 块: [")
     assert text.endswith("…")          # 超过 20 个时以省略号结尾
     assert "20" not in text            # 第 21 个及之后的索引不展示
+
+
+def test_resend_without_session_warns(qapp, monkeypatch):
+    """无活跃发送会话时点补发应提示，而非崩溃或启动定时器。"""
+    from PySide6.QtWidgets import QMessageBox
+    w = MainWindow()
+    w._send_ctrl = None
+    called = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a: called.append(a))
+    w._resend()
+    assert called   # 弹了提示，未进入补发分支

@@ -62,6 +62,7 @@ class SendController:
         self._end_frame = encode_frame(
             FrameHeader(FrameType.END, session_id=session_id), EndPayload(self._sha).pack())
         self._round_symbols = max(1, int(self.K * self.config.redundancy))
+        self._next_sid = 0   # 全局符号游标；正常播放/人工补发/断点续传共用，确保 symbol_id 单调递增
 
     @property
     def grid_cells(self) -> int:
@@ -72,16 +73,40 @@ class SendController:
         """总帧数估算：(MANIFEST + DATA×round_symbols + END) × rounds。"""
         return (1 + self._round_symbols + 1) * self.config.rounds
 
+    @property
+    def next_sid(self) -> int:
+        """当前符号游标（下一个将发的 symbol_id）。供断点续传快照使用。"""
+        return self._next_sid
+
+    def next_data_frame(self) -> bytes:
+        """生成下一个 DATA 帧（symbol_id=_next_sid），游标 +1。
+
+        LT 喷泉码对 (session_id, symbol_id) 确定性映射，故游标单调递增即可保证
+        每次产出不重复的新编码符号——这是人工补发能补缺块的根基（重发旧 sid 无增益）。
+        """
+        degree, adj, xd = self._encoder.encode_symbol(self._next_sid)
+        payload = DataPayload(degree, adj, xd).pack()
+        frame = encode_frame(
+            FrameHeader(FrameType.DATA, session_id=self.session_id, symbol_id=self._next_sid),
+            payload)
+        self._next_sid += 1
+        return frame
+
+    def extra_data_frames(self, n: int) -> Iterator[bytes]:
+        """追加产出 n 个新 DATA 帧（新 symbol_id），供人工补发使用。"""
+        if n < 0:
+            raise ValueError("补发帧数不能为负")
+        for _ in range(n):
+            yield self.next_data_frame()
+
     def __iter__(self) -> Iterator[bytes]:
-        """循环帧流：每轮 MANIFEST → DATA×round_symbols → END，symbol_id 全局递增。"""
-        sid = 0
+        """循环帧流：每轮 MANIFEST → DATA×round_symbols → END。
+
+        基于实例游标 self._next_sid 推进；多次迭代从当前游标继续而非重置，
+        因此「播完主轮 → 调 extra_data_frames 补发」可无缝衔接。
+        """
         for _ in range(self.config.rounds):
             yield self._manifest_frame
             for _ in range(self._round_symbols):
-                degree, adj, xd = self._encoder.encode_symbol(sid)
-                payload = DataPayload(degree, adj, xd).pack()
-                yield encode_frame(
-                    FrameHeader(FrameType.DATA, session_id=self.session_id, symbol_id=sid),
-                    payload)
-                sid += 1
+                yield self.next_data_frame()
             yield self._end_frame
