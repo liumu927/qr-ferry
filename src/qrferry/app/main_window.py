@@ -162,6 +162,10 @@ QPushButton#seg:checked {{ background: {card}; color: {accent}; }}
 """
 
 
+# 发送端断点续传快照目录（接收端用用户选的 save_dir；发送端无对应目录，用用户主目录下的固定位置）
+_SENDER_STATE_DIR = os.path.expanduser("~/.qrferry")
+
+
 class MainWindow(QMainWindow):
     GRID_OPTIONS = [("1×1", (1, 1)), ("2×2", (2, 2))]
 
@@ -341,6 +345,10 @@ class MainWindow(QMainWindow):
         extra_row.addWidget(self._s_resend)
         left.addLayout(extra_row)
 
+        self._s_resume = QPushButton("恢复上次发送")
+        self._s_resume.clicked.connect(self._resume_send)
+        left.addWidget(self._s_resume)
+
         self._s_start = QPushButton("开始发送")
         self._s_start.setCheckable(True)
         self._s_start.toggled.connect(self._toggle_send)
@@ -501,6 +509,24 @@ class MainWindow(QMainWindow):
         else:
             self._stop_send()
 
+    def _resume_send(self):
+        """从上次中断处恢复发送（断点续传）。"""
+        from qrferry.app import session_store
+        try:
+            ctrl = session_store.load_sender(_SENDER_STATE_DIR)
+        except OSError:
+            ctrl = None
+        if ctrl is None:
+            QMessageBox.information(self, "恢复发送", "没有可恢复的发送会话")
+            return
+        self._send_ctrl = ctrl
+        self._send_iter = iter(ctrl)   # __iter__ 基于 _next_sid 推进，自动从断点产出新符号
+        self._s_start.setText("停止发送")
+        self._s_start.setChecked(True)
+        self._send_timer.start(int(1000 / self._s_fps.value()))
+        self.statusBar().showMessage(
+            f"恢复发送：会话 {ctrl.session_id}，从 symbol_id={ctrl.next_sid} 继续（K={ctrl.K}）")
+
     def _start_send(self):
         if self._s_file.isChecked():
             if not self._file_path or not os.path.isfile(self._file_path):
@@ -526,11 +552,21 @@ class MainWindow(QMainWindow):
             rounds=3,
         )
         sid = random.randint(1, 0xFFFFFFFF)
-        self._send_ctrl = SendController(data, ct, filename, sid, cfg)
+        is_file = (ct == ContentType.FILE)
+        self._send_ctrl = SendController(
+            data, ct, filename, sid, cfg,
+            source_kind="file" if is_file else "text",
+            source_path=self._file_path if is_file else None)
         self._send_iter = iter(self._send_ctrl)
         self._s_start.setText("停止发送")
         self._send_timer.start(int(1000 / self._s_fps.value()))
         self.statusBar().showMessage(f"发送中：K={self._send_ctrl.K}，{cfg.rounds} 轮")
+        # 持久化发送端快照，支持断点续传（失败不阻断发送）
+        from qrferry.app import session_store
+        try:
+            session_store.save_sender(self._send_ctrl, _SENDER_STATE_DIR)
+        except OSError:
+            pass
 
     def _stop_send(self):
         self._send_timer.stop()

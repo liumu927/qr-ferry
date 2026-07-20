@@ -83,3 +83,36 @@ def test_pipeline_resume_completes_after_interrupt():
         assert pipe2.is_complete
         assert pipe2.result.data == data
         assert session_store.load(d) is None   # 完成后快照应被清理
+
+
+def test_save_load_sender_text_round_trip():
+    """TEXT 模式 sender 快照往返：原始数据落 bin 后 load_sender 重建可续传。"""
+    with tempfile.TemporaryDirectory() as d:
+        data = _rand(1500, 21)
+        ctrl = SendController(data, ContentType.TEXT, "", session_id=5,
+                              config=SenderConfig(chunk_size_log=6, rounds=1),
+                              source_kind="text", source_path=None)
+        for _ in range(7):
+            ctrl.next_data_frame()
+        session_store.save_sender(ctrl, d)
+        loaded = session_store.load_sender(d)
+        assert loaded is not None
+        assert loaded.session_id == 5
+        assert loaded.next_sid == 7
+        assert loaded.raw_data == data
+
+
+def test_load_sender_returns_none_when_no_file():
+    with tempfile.TemporaryDirectory() as d:
+        assert session_store.load_sender(d) is None
+
+
+def test_clear_sender_removes_json_and_bin():
+    with tempfile.TemporaryDirectory() as d:
+        ctrl = SendController(_rand(800, 4), ContentType.TEXT, "", session_id=3,
+                              config=SenderConfig(rounds=1),
+                              source_kind="text", source_path=None)
+        session_store.save_sender(ctrl, d)
+        assert session_store.load_sender(d) is not None
+        session_store.clear_sender(d)
+        assert session_store.load_sender(d) is None

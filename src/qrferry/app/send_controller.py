@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import zlib
 from dataclasses import dataclass
@@ -34,7 +35,8 @@ class SendController:
     """发送端逻辑：预处理一次，迭代产出循环帧流。"""
 
     def __init__(self, data: bytes, content_type: int, filename: str,
-                 session_id: int, config: SenderConfig | None = None):
+                 session_id: int, config: SenderConfig | None = None,
+                 source_kind: str | None = None, source_path: str | None = None):
         if not data:
             raise ValueError("发送数据不能为空")
         self.config = config or SenderConfig()
@@ -42,6 +44,9 @@ class SendController:
         self.content_type = content_type
         self.filename = filename
         self.raw_size = len(data)
+        self._raw_data = data             # 原始数据引用，供 TEXT 模式续传持久化
+        self._source_kind = source_kind   # "file" | "text" | None
+        self._source_path = source_path   # FILE: 原文件路径；TEXT: 由 store 落 bin 后回填
 
         if self.config.compression == int(Compression.NONE):
             self._encoded = data
@@ -110,3 +115,62 @@ class SendController:
             for _ in range(self._round_symbols):
                 yield self.next_data_frame()
             yield self._end_frame
+
+    @property
+    def raw_data(self) -> bytes:
+        """原始发送数据（供 TEXT 模式断点续传持久化）。"""
+        return self._raw_data
+
+    # ── 断点续传 ──
+    def to_snapshot(self) -> dict:
+        """导出可 JSON 序列化的发送端快照。"""
+        return {
+            "session_id": self.session_id,
+            "content_type": self.content_type,
+            "filename": self.filename,
+            "raw_size": self.raw_size,
+            "config": {
+                "chunk_size_log": self.config.chunk_size_log,
+                "compression": self.config.compression,
+                "ecc_level": self.config.ecc_level,
+                "redundancy": self.config.redundancy,
+                "lt_dist": self.config.lt_dist,
+                "grid": list(self.config.grid),
+                "rounds": self.config.rounds,
+            },
+            "next_sid": self._next_sid,
+            "source_kind": self._source_kind,
+            "source_path": self._source_path,
+            "raw_sha_b64": base64.b64encode(self._sha).decode("ascii"),
+        }
+
+    @classmethod
+    def from_snapshot(cls, snap: dict) -> "SendController":
+        """从快照重建发送端：FILE 模式重读文件并校验 raw_sha，TEXT 模式从 bin 还原。
+
+        确定性根基：相同 (session_id, blocks) → encode_symbol(sid) 可复现，故只需把
+        _next_sid 设为快照值，重建的 encoder 即从该游标续传相同符号。
+        """
+        cfg_d = snap["config"]
+        cfg = SenderConfig(
+            chunk_size_log=cfg_d["chunk_size_log"],
+            compression=cfg_d["compression"],
+            ecc_level=cfg_d["ecc_level"],
+            redundancy=cfg_d["redundancy"],
+            lt_dist=cfg_d["lt_dist"],
+            grid=tuple(cfg_d["grid"]),
+            rounds=cfg_d["rounds"],
+        )
+        kind = snap.get("source_kind")
+        path = snap.get("source_path")
+        if not kind or not path:
+            raise ValueError("快照缺少数据来源")
+        with open(path, "rb") as f:
+            data = f.read()
+        if kind == "file":
+            if hashlib.sha256(data).digest() != base64.b64decode(snap["raw_sha_b64"]):
+                raise ValueError(f"文件 {path} 自上次发送后已变更，无法续传")
+        ctrl = cls(data, snap["content_type"], snap["filename"], snap["session_id"], cfg,
+                   source_kind=kind, source_path=path)
+        ctrl._next_sid = snap["next_sid"]
+        return ctrl

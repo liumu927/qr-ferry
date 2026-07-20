@@ -90,12 +90,46 @@ def test_extra_frames_complete_lossy_transfer():
     rng = random.Random(5)
     rng.shuffle(keep)
     for fb in keep:
-        h, p = decode_frame(fb); sess.ingest(h, p)
+        h, p = decode_frame(fb)
+        sess.ingest(h, p)
     assert not sess.is_complete, "40% 符号不应足以完成恢复"
     # 补发新符号直到完成（游标从主轮末尾继续，产出全新 symbol_id）
     for fb in ctrl.extra_data_frames(ctrl.K * 5):
-        h, p = decode_frame(fb); sess.ingest(h, p)
+        h, p = decode_frame(fb)
+        sess.ingest(h, p)
         if sess.is_complete:
             break
     assert sess.is_complete
     assert zlib.decompress(sess.reassemble()) == data
+
+
+def test_sender_snapshot_file_round_trip(tmp_path):
+    """FILE 模式 snapshot → 重建：游标保留且续传符号确定一致。"""
+    data = _rand(3000, 55)
+    path = tmp_path / "f.bin"
+    path.write_bytes(data)
+    ctrl = SendController(data, ContentType.FILE, "f.bin", session_id=9,
+                         config=SenderConfig(chunk_size_log=6, rounds=1),
+                         source_kind="file", source_path=str(path))
+    for _ in range(10):
+        ctrl.next_data_frame()
+    assert ctrl.next_sid == 10
+    ctrl2 = SendController.from_snapshot(ctrl.to_snapshot())
+    assert ctrl2.next_sid == 10
+    assert ctrl2.session_id == 9
+    # 重建后在同 sid 上产出确定一致的符号（续传根基）
+    assert ctrl._encoder.encode_symbol(10) == ctrl2._encoder.encode_symbol(10)
+
+
+def test_sender_snapshot_rejects_changed_file(tmp_path):
+    """FILE 模式：源文件篡改后 from_snapshot 拒绝（raw_sha 不匹配）。"""
+    data = _rand(2000, 8)
+    path = tmp_path / "f.bin"
+    path.write_bytes(data)
+    ctrl = SendController(data, ContentType.FILE, "f.bin", session_id=1,
+                         config=SenderConfig(rounds=1),
+                         source_kind="file", source_path=str(path))
+    snap = ctrl.to_snapshot()
+    path.write_bytes(b"tampered content")
+    with pytest.raises(ValueError):
+        SendController.from_snapshot(snap)

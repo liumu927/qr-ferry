@@ -10,8 +10,9 @@ import os
 from typing import Optional
 
 from qrferry.core.session import ReceiveSession
+from qrferry.app.send_controller import SendController
 
-__all__ = ["save", "load", "clear"]
+__all__ = ["save", "load", "clear", "save_sender", "load_sender", "clear_sender"]
 
 _DIR_NAME = ".qrferry"
 _PENDING_FILE = "pending.json"
@@ -55,3 +56,51 @@ def clear(save_dir: str) -> None:
         os.remove(_pending_path(save_dir))
     except FileNotFoundError:
         pass
+
+
+# ── 发送端断点续传 ───────────────────────────────────────
+_SENDER_FILE = "sender.json"
+
+
+def _sender_path(save_dir: str) -> str:
+    return os.path.join(_state_dir(save_dir), _SENDER_FILE)
+
+
+def save_sender(ctrl: SendController, save_dir: str) -> None:
+    """持久化发送端快照；TEXT 模式同时把原始数据落 bin 以便重启还原。"""
+    snap = ctrl.to_snapshot()
+    os.makedirs(_state_dir(save_dir), exist_ok=True)
+    if snap.get("source_kind") == "text":
+        bin_path = os.path.join(_state_dir(save_dir), f"send_{snap['session_id']}.bin")
+        with open(bin_path, "wb") as f:
+            f.write(ctrl.raw_data)
+        snap["source_path"] = bin_path
+    with open(_sender_path(save_dir), "w", encoding="utf-8") as f:
+        json.dump(snap, f, ensure_ascii=False)
+
+
+def load_sender(save_dir: str) -> Optional[SendController]:
+    """读取发送端快照重建 SendController；无文件/损坏/源失效返回 None。"""
+    path = _sender_path(save_dir)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            snap = json.load(f)
+        return SendController.from_snapshot(snap)
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def clear_sender(save_dir: str) -> None:
+    """清理发送端快照与 TEXT bin（发送完成或放弃后续传时调用）。"""
+    import glob
+    try:
+        os.remove(_sender_path(save_dir))
+    except FileNotFoundError:
+        pass
+    for p in glob.glob(os.path.join(_state_dir(save_dir), "send_*.bin")):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
