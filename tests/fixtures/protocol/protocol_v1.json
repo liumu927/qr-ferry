@@ -1,0 +1,1628 @@
+{
+  "description": "qr-ferry 协议 v1.0 字节级黄金参考；跨语言实现须逐字节复现",
+  "generated_by": "scripts/gen_protocol_fixtures.py",
+  "protocol": {
+    "protocol_version": "v1.0",
+    "byte_order": "little-endian",
+    "frame_layout": "Header(18) + Payload(variable) + CRC32(4)",
+    "magic": "0x4F51",
+    "version": 1,
+    "header_size": 18,
+    "crc_size": 4,
+    "header_fmt": "<HBBIIIH",
+    "header_fields": [
+      "MAGIC(u16)",
+      "VERSION(u8)",
+      "TYPE(u8)",
+      "SESSION(u32)",
+      "STREAM(u32)",
+      "SYMBOL(u32)",
+      "PAYLOAD_LEN(u16)"
+    ],
+    "frame_types": {
+      "MANIFEST": 1,
+      "DATA": 2,
+      "END": 3,
+      "FEEDBACK": 4,
+      "CIMBAR": 5
+    },
+    "content_types": {
+      "FILE": 1,
+      "TEXT": 2
+    },
+    "compressions": {
+      "NONE": 0,
+      "ZLIB": 1,
+      "ZSTD": 2
+    },
+    "lt_distributions": {
+      "RSD": 0,
+      "ISD": 1,
+      "DEGENERATE": 2
+    }
+  },
+  "cases": [
+    {
+      "name": "text_short",
+      "session_id": 42,
+      "content_type": 2,
+      "compression": 1,
+      "lt_dist": 0,
+      "chunk_size_log": 4,
+      "redundancy": 2.0,
+      "rounds": 1,
+      "K": 2,
+      "raw_size": 14,
+      "encoded_size": 22,
+      "raw_sha256": "d8612089c5ebead2f5e6014b62ad2aa392adb19cb37272fcfcc47444bbfa6e58",
+      "input_hex": "68656c6c6f2071722d6665727279",
+      "input_text": "hello qr-ferry",
+      "filename": "",
+      "manifest_frame_hex": "514f01012a0000000000000000000000390002010400020000000e00000000000000160000000000000000d8612089c5ebead2f5e6014b62ad2aa392adb19cb37272fcfcc47444bbfa6e58a1cf236b",
+      "end_frame_hex": "514f01032a00000000000000000000002000d8612089c5ebead2f5e6014b62ad2aa392adb19cb37272fcfcc47444bbfa6e588fdcd1b8",
+      "data_symbols": [
+        {
+          "symbol_id": 0,
+          "degree": 1,
+          "adjacency": [
+            0
+          ],
+          "xor_data_hex": "789ccb48cdc9c957282cd24d4b2d2aaa",
+          "frame_hex": "514f01022a00000000000000000000001600010000000000789ccb48cdc9c957282cd24d4b2d2aaa14fec6d2"
+        },
+        {
+          "symbol_id": 1,
+          "degree": 1,
+          "adjacency": [
+            0
+          ],
+          "xor_data_hex": "789ccb48cdc9c957282cd24d4b2d2aaa",
+          "frame_hex": "514f01022a00000000000000010000001600010000000000789ccb48cdc9c957282cd24d4b2d2aaa090373d3"
+        },
+        {
+          "symbol_id": 2,
+          "degree": 1,
+          "adjacency": [
+            1
+          ],
+          "xor_data_hex": "04002802056d00000000000000000000",
+          "frame_hex": "514f01022a0000000000000002000000160001000100000004002802056d0000000000000000000042c2e50a"
+        },
+        {
+          "symbol_id": 3,
+          "degree": 2,
+          "adjacency": [
+            0,
+            1
+          ],
+          "xor_data_hex": "7c9ce34ac8a4c957282cd24d4b2d2aaa",
+          "frame_hex": "514f01022a00000000000000030000001a00020000000000010000007c9ce34ac8a4c957282cd24d4b2d2aaaed339907"
+        }
+      ]
+    },
+    {
+      "name": "text_unicode",
+      "session_id": 100,
+      "content_type": 2,
+      "compression": 1,
+      "lt_dist": 0,
+      "chunk_size_log": 4,
+      "redundancy": 2.0,
+      "rounds": 1,
+      "K": 2,
+      "raw_size": 21,
+      "encoded_size": 32,
+      "raw_sha256": "e23dd4630c3e1683cfd99191b4ac5a0e257c7588ec859106c99d0571231dd511",
+      "input_hex": "e4bda0e5a5bdefbc8ce58589e5ada6e69186e6b8a1",
+      "input_text": "你好，光学摆渡",
+      "filename": "",
+      "manifest_frame_hex": "514f0101640000000000000000000000390002010400020000001500000000000000200000000000000000e23dd4630c3e1683cfd99191b4ac5a0e257c7588ec859106c99d0571231dd511e423659e",
+      "end_frame_hex": "514f01036400000000000000000000002000e23dd4630c3e1683cfd99191b4ac5a0e257c7588ec859106c99d0571231dd511ceba692c",
+      "data_symbols": [
+        {
+          "symbol_id": 0,
+          "degree": 1,
+          "adjacency": [
+            1
+          ],
+          "xor_data_hex": "e58589e5ada6e69186e6b8a1aa910f27",
+          "frame_hex": "514f01026400000000000000000000001600010001000000e58589e5ada6e69186e6b8a1aa910f270233209c"
+        },
+        {
+          "symbol_id": 1,
+          "degree": 1,
+          "adjacency": [
+            0
+          ],
+          "xor_data_hex": "789c011500eaffe4bda0e5a5bdefbc8c",
+          "frame_hex": "514f01026400000000000000010000001600010000000000789c011500eaffe4bda0e5a5bdefbc8c8d49e32f"
+        },
+        {
+          "symbol_id": 2,
+          "degree": 1,
+          "adjacency": [
+            1
+          ],
+          "xor_data_hex": "e58589e5ada6e69186e6b8a1aa910f27",
+          "frame_hex": "514f01026400000000000000020000001600010001000000e58589e5ada6e69186e6b8a1aa910f2738c94b9f"
+        },
+        {
+          "symbol_id": 3,
+          "degree": 1,
+          "adjacency": [
+            0
+          ],
+          "xor_data_hex": "789c011500eaffe4bda0e5a5bdefbc8c",
+          "frame_hex": "514f01026400000000000000030000001600010000000000789c011500eaffe4bda0e5a5bdefbc8cb7b3882c"
+        }
+      ]
+    },
+    {
+      "name": "file_binary",
+      "session_id": 200,
+      "content_type": 1,
+      "compression": 1,
+      "lt_dist": 0,
+      "chunk_size_log": 6,
+      "redundancy": 2.0,
+      "rounds": 1,
+      "K": 48,
+      "raw_size": 3000,
+      "encoded_size": 3011,
+      "raw_sha256": "fe6124e1f6d86a0c273ed45d226951c699ea5027cb4d5fdbd115f17cafca09ab",
+      "input_hex": "b97f69f75edf35c71fdad37066eae91d14f6ea01456b341770b835e942f549f1d1ee73f0bdb597ced9dd0c95d4ebf0089295ebab5c2d6eb1c6f97c15ed2f3219361838c42866c95ac9909f3c222a7604606de307a79997fc4802edc9301e0e04534999580a0af8a5fb5f8f9f4d8af77bfd18a69d7514ab765fad072641995e174307df2eb00ba2b6122b4a1dcfc268d8660ebe03b717ca80aebf9b7c718266e1ffc903f78cbbf43f562787106842d1aa5cc1848a357c8de9d72045770ec18d113c82f999661ed5ac330ac416a7fcd983208539941b62c40b228e03454bad0ad3575d728ee5db2510c5bf06a58ffd6b4d1f33257b0d4aa5d9e0f3f05a62583644e66ec83fc2a6cda723dffaeec74f3533b03c1174ebe365e018a5b887516958aaf2d0f004a68a04f1c6f71282ca13121251d07a01baea6055e101ce24c16ec3b57c2f0b79616248a895d79960dae1c72a086dde0deb118413aa446896fef91f7f9d1dfc2961484813c831ad8e206d1037b149ed2471e7f106615bf3efd495a25886f15ec53a37631ca891f9f4ff519987aa802724ca01a6ab61372e4e24a14274a88b220a26698f6ac44bdb46f42692a9939a77ce41db4a0a7b5a662ddb3c8c45f8ee91272eadde4c017168f455a3fbd82cae90274bb577c7c9c479d5fd9ae9768817830aadb9279066ecdc62c471a6c38be17e59e077f07e6e297a57685d36951fb903d130a8d677dbded67966b39a0b7f7f6bc85a6ad6ee7afa887846acc4def3743dd1f86d4c98006aaee1283e832bbb638970e0a6c9bba0c8f3c7731eeb847fe092d0c0611870029db14b5f166946b461b61f274f15c70fea842f7d42946a469da16f8945e1c47d6a951ee19a68f0bfeaa087924d641ae8f154d4cd9e2fd79124367c86417760e00357d1a47617d1054809a8fbc366417a651ba4427300319bc96858fa39b01beb74e1b331fa3bb30c4458cf921ba1f612443c28b3069694b01272e85f9e68f1a4d5f244a07ed0f80205a427dcb011d960a429d7317bd6fbab4e5ab8e437d052a5e726cb582a78c93b025972d1c07eb8c43c1e12e80e181413a62e65d488d2364461380cd80800e5810b4049eac3abcd9a03ba092d0c2a384010b881c41d62d483657116a1a2f4ca47a9cdee174560f0980b0bb3257197ff0fff255167693d4eeeddeef15f3af975c04af410793ac19509dce6412d0644dbd01ab012b75e57b09d46226d34c912f3d981af33c450ee195da28a657671d131e6b271b49a22eee2b49629e31a6ca67532ef21801ff77f3c94488bd176602cccec2c7b5c86a957ee62dbd2db1a2580349c47d983cebbc1e32280d1b31109d26b7a7ab82c9fffd9f3e390a2957fd60834f842414d5787700f780717d004823c5a3c8eca88a5f82e2716f4e47f19cc0de8f2a3f8c5e8316df330468d8cdb90f178552a715566bc8323ead08421f87a4e0ce29fdf9f56ab422a777de3ec26091a25ea84a3d792e4ca8b301fdb11ff83bbb627e44553ab35c82b24d46f000ec611abaff4b8ac2534920f635366a3e74b6e163e4f06c2e04fc7caa047f5252b3160ea29858f37dba0370aa02bca6e977c356405009abc9e990c5331c00535a5c3c1f8de70a5d29fcfb9acf3649661cd25b7ef5031d1df16f24bea3e2dc4f5ee33b14780cb9889a39dc0a10012cbeba8f4f54dba9b0a6cbbefa65159dc6daf5d60e793ae04cfd8cd40c326447cb9d6d2135b885e40c6178d08acc3c80da44270572c4768ab06698ac86a6692609adb6519a0902e99d846efdc9a8649fe1d1d8de59fb30ed61660c9ac3346a438c136be6a254ca1485bb704564ed60c0667963582f9654892700d64867a59eb469fe0e572a2d5ea37c870f7ed843ba011e2c67b7f917d2175522ab62d6b61d1a8d34eef74a0000983c512afd6ee7aa51c1e65be52654ccc11cd6d536e84d7cfbccbae84ede0d30d45c67a3c1d822f11f287663e73dfa076b75b7ac3a23d289eae00484eb86c971138995e9feebca757f5b9998c09b35818dfc0341a61422bc44ad484254b07ff7607ffed9a0b6a91644f197566a6c4cdd76516ab270d7479d67beba8074d3e07ecf424cda0a6adcb68abbdb9e9c9c777851824a950daa2ccf8ca8c1ab3ace30689b5db5df98411f8ac8a47cb0706cf799178b0107e7284ea6332d823d9ba63e318afc5e7e97b35e518508896957fef541d57ecfa63a25059d1a2eac0366bc1c01fc0e4fed1ac264ad953724cbdc178ae5666a1afe3f343952c55a154a3151790b0182bf2ddf399f3c840354b09f901904d19cf31c767588280f074d0a389e3bfd1d06e47f7588e12136eb688e4d78eb1dc052a9a946939341045f2562e28a1827f6a9055dc8ff9e9c4103152c57b417500217b4425b2bf1500e379c28d3bfb869ac2d796cbe22095d7c9598cc5309f1ee3bdfad262e6c83e579fd441ed1d335f33e41723e2e4ddded6d94307e5ae006547079009ffbc25aa0bf59cfd7c7f480b7aeb4bf95dfe6d352548a6aafc93a127f1eb9bfd3755215077cd01847f51fd5abe053f6fca0ea3e8d5aae983d41254e8f8c6a9110fac14d8f2e273c26dbd1cf5c5101f4ec0beec427066b5b2f6484e7c3f2bd5e818b56e9466a537386af50559d7cd1e8196213715094d34a729af15e902f79acfa0f6a50404ccc8ae90cdc5956f67c25423a5d0dcf2166e903777c73afdd89b2972fc5c7a92bad97f859858af90fda6f09e28ffac412c3ff3a932e1fd7c05d32306c5bae055b7458833bf649f8943af9e29cc77112f944125389c09885a12f1f20d28ddd644f9473ec4f94bb07e4b0c2a72acfde9c880a58122da22c199ea47817732fcb07cb600c6cabba5641cd469dacc24bdd630b695535708012165624eb51e78f4ff490acd8f9891f0905415fb88af0b349cb11d6599005520d800314372c288770acff9275fdd839511b85602ee1cad7d5e295a4dc352042dd7ebc805adad858c68dc48e5e2a7a06c0b5f83a29a4335a99c38a326125fa76c508229593a60a48d9fcdbc92cdc49abc32a2aa9f589a4d95f009ed8af0c24a718530bb65b0c9fee4c443b439616b09fc96c837277e55752afa2a346d0dbe87a307ca15b572964555ce288a8614118a0ed49ecc0c4bfe59286d680ce6ed1e381e578461dc251276747c95744aad10ef4dc13a1a9aa65496f53defe26cb166e0f7fb336462cb1010a107e7e33fddf0f9d5bc18b54a5b683f6897fbd3145fd1813d6afd808e2c31341d13d352b1a32c1b8f04b35f57369a2e7cc6e1834a32c6a4bcd598b076fdd85deb9a72f4d39ec7012e8c4eaf0bbb47673624649b79808d1967f83d8ceb2167a09cacb0b101e9c0e535418615b8a6d9bb43be70a4ac0cb24140f0f520fbe9a8729199daf9d177be8d8e5c30c80699977fa1bafcc72d5f0b0ad54983218b6524db7f68e3b645c75db02c5ebf92f23b6d780749891e3d02920035e69b571050b8e64195f26041fc3e821844645ad71e233b528b8869939913641009c5af75ddec86f337817bb388ccde32920be4f397b76e915e4fb385899002142fa81c7e527718fd4a8d13e45c2ca798d65f1d36ede6afdc4511024fb6a760e3b1b8e986a401f1222dac4bf5742b5be2fd5f7835e9a1ee502bc15378e0d5add300b41197f73257fff804a2268b516617b20aa99a6874ee303df4a814317a959871f0c1fd45bed97ed589ba21de967518ba3d6d9b2c8abc965abf632af219c1e4bdab901b9624d542d0b4d5d8d8ae33cf683001b687720a757c5f0338c192e44899fb3853964ece297bcaa1fcd3bb13ee7a2069ab8370b2fd7154b065b96b1ffcba7891b2cd3f1a6cbc34dd7e5f6806449ee1ee421a230da9b66ef6ccac5d82718780e6abd928f1ca66818384d5861c7f9412dc85201307291b7274cfc8feea27785579f47cd459c518bceddd8b92aec68ec12dc021a731c6ce71e107c520b78241ec502d3dc373ebfd0e0dd1b2a409241295bdd655ac1566647f84e4f402a0284bb10425b65d55ae855dc7df5abe94cd6754e94c8ca6c396da507d373083e3039be8931179c290fdaca8cc5eee915cbfac9e5bd4eda4143777bf92cd51aca420f2cd720b71dd2b16ebb5e95d8628599f1be004078a5b01fccf6ae755fdad49947618bafb158f717813c1be8c32dbb2012dcc86929b9478b3e5b812fd55f2fe322c5d93b460e9918045eed3e5b1261871edb7a71833f919bb43",
+      "input_text": null,
+      "filename": "f.bin",
+      "manifest_frame_hex": "514f0101c800000000000000000000003e000101060030000000b80b000000000000c30b00000000000005662e62696efe6124e1f6d86a0c273ed45d226951c699ea5027cb4d5fdbd115f17cafca09ab606ed308",
+      "end_frame_hex": "514f0103c800000000000000000000002000fe6124e1f6d86a0c273ed45d226951c699ea5027cb4d5fdbd115f17cafca09aba126f097",
+      "data_symbols": [
+        {
+          "symbol_id": 0,
+          "degree": 5,
+          "adjacency": [
+            6,
+            19,
+            24,
+            25,
+            43
+          ],
+          "xor_data_hex": "a8676b6eb0839b6f0d2b7b4207ad232209bd80d1f1c9e84eab8a0660868f650b5ef819369aa78fc517f3d4dc3d28cfbb9402069673d6c8b23ee5102fc2be1a89",
+          "frame_hex": "514f0102c8000000000000000000000056000500060000001300000018000000190000002b000000a8676b6eb0839b6f0d2b7b4207ad232209bd80d1f1c9e84eab8a0660868f650b5ef819369aa78fc517f3d4dc3d28cfbb9402069673d6c8b23ee5102fc2be1a89b3b1cc07"
+        },
+        {
+          "symbol_id": 1,
+          "degree": 30,
+          "adjacency": [
+            1,
+            3,
+            4,
+            5,
+            9,
+            10,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            21,
+            22,
+            23,
+            24,
+            25,
+            27,
+            29,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            39,
+            42,
+            43,
+            46
+          ],
+          "xor_data_hex": "b147f67a726b421db8c8494f9ec44ce5f7f9a18a086610cf6aad8825225846a28915fff59d911f3f19ef792262fdb47f940828b44b4f51da5fe12c94f0c183ec",
+          "frame_hex": "514f0102c80000000000000001000000ba001e0001000000030000000400000005000000090000000a0000000c0000000d0000000e0000000f00000010000000110000001200000015000000160000001700000018000000190000001b0000001d000000200000002100000022000000230000002400000025000000270000002a0000002b0000002e000000b147f67a726b421db8c8494f9ec44ce5f7f9a18a086610cf6aad8825225846a28915fff59d911f3f19ef792262fdb47f940828b44b4f51da5fe12c94f0c183ecf33cb339"
+        },
+        {
+          "symbol_id": 2,
+          "degree": 30,
+          "adjacency": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            7,
+            10,
+            12,
+            14,
+            17,
+            20,
+            23,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            36,
+            37,
+            39,
+            40,
+            42,
+            45,
+            46,
+            47
+          ],
+          "xor_data_hex": "d968081ffed308f48bab59c85e1a2d4373bc551c371038c0f683dc5b2a3248b591e419b0513a7a470fdd9e4bf0efd298310da80743d83d50d1a9234cc5845daa",
+          "frame_hex": "514f0102c80000000000000002000000ba001e000000000001000000020000000300000004000000070000000a0000000c0000000e000000110000001400000017000000190000001a0000001b0000001c0000001d0000001e0000001f000000200000002100000022000000240000002500000027000000280000002a0000002d0000002e0000002f000000d968081ffed308f48bab59c85e1a2d4373bc551c371038c0f683dc5b2a3248b591e419b0513a7a470fdd9e4bf0efd298310da80743d83d50d1a9234cc5845daa5d1bb403"
+        },
+        {
+          "symbol_id": 3,
+          "degree": 2,
+          "adjacency": [
+            13,
+            21
+          ],
+          "xor_data_hex": "1ae9755e0e06822e8a777bd144562f3f753dbfb04e5975c9c93102d6ec2fefacc0f824935421971c0b7d7fe430d36752fae9c3b024f220d4c46949f84d6c364c",
+          "frame_hex": "514f0102c800000000000000030000004a0002000d000000150000001ae9755e0e06822e8a777bd144562f3f753dbfb04e5975c9c93102d6ec2fefacc0f824935421971c0b7d7fe430d36752fae9c3b024f220d4c46949f84d6c364c2bb0489e"
+        },
+        {
+          "symbol_id": 4,
+          "degree": 2,
+          "adjacency": [
+            29,
+            33
+          ],
+          "xor_data_hex": "3cf871a44c63abd4e3d045b530e2fcbaedd2dacd556952884ebc1bd5149e8931ee12b5760879b980dec3f5c052289bc9705a63545779a7cdcd5d0cb9e8452cfb",
+          "frame_hex": "514f0102c800000000000000040000004a0002001d000000210000003cf871a44c63abd4e3d045b530e2fcbaedd2dacd556952884ebc1bd5149e8931ee12b5760879b980dec3f5c052289bc9705a63545779a7cdcd5d0cb9e8452cfbc8000406"
+        },
+        {
+          "symbol_id": 5,
+          "degree": 30,
+          "adjacency": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            9,
+            11,
+            13,
+            15,
+            17,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            27,
+            32,
+            34,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            44,
+            45,
+            46
+          ],
+          "xor_data_hex": "58eacd449d641dd409c11867be5af14d070074a4563b9ee6dd1147270bcbf0839544c042e2212061215263295b50c44cd9485d958a9b1903d54ec74c9ec3d131",
+          "frame_hex": "514f0102c80000000000000005000000ba001e0000000000010000000200000003000000040000000500000006000000090000000b0000000d0000000f000000110000001400000015000000160000001700000018000000190000001b00000020000000220000002400000025000000260000002700000028000000290000002c0000002d0000002e00000058eacd449d641dd409c11867be5af14d070074a4563b9ee6dd1147270bcbf0839544c042e2212061215263295b50c44cd9485d958a9b1903d54ec74c9ec3d131dcb896d1"
+        },
+        {
+          "symbol_id": 6,
+          "degree": 3,
+          "adjacency": [
+            15,
+            20,
+            31
+          ],
+          "xor_data_hex": "ea8d8ba47044502ebe5fbe5b7b37630351249d054566c8274116d0217dc330bc81d5c713dae7feedf6fd04b64ca8ce81047b5936050a590440596fd3f8541ea0",
+          "frame_hex": "514f0102c800000000000000060000004e0003000f000000140000001f000000ea8d8ba47044502ebe5fbe5b7b37630351249d054566c8274116d0217dc330bc81d5c713dae7feedf6fd04b64ca8ce81047b5936050a590440596fd3f8541ea0397b28c3"
+        },
+        {
+          "symbol_id": 7,
+          "degree": 30,
+          "adjacency": [
+            0,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            14,
+            15,
+            17,
+            18,
+            19,
+            20,
+            23,
+            24,
+            26,
+            27,
+            28,
+            31,
+            32,
+            38,
+            40,
+            41,
+            44,
+            45,
+            47
+          ],
+          "xor_data_hex": "bba6262d935aa00600f4edd82e0b6725929c8f5b7259c1e6604159767df856f2e5735ab2ba228a139d5688771fd4c1642fe75e65ff91f8e92273277060c1f8d1",
+          "frame_hex": "514f0102c80000000000000007000000ba001e0000000000030000000400000005000000060000000700000008000000090000000a0000000b0000000c0000000e0000000f0000001100000012000000130000001400000017000000180000001a0000001b0000001c0000001f000000200000002600000028000000290000002c0000002d0000002f000000bba6262d935aa00600f4edd82e0b6725929c8f5b7259c1e6604159767df856f2e5735ab2ba228a139d5688771fd4c1642fe75e65ff91f8e92273277060c1f8d101e1f385"
+        },
+        {
+          "symbol_id": 8,
+          "degree": 30,
+          "adjacency": [
+            1,
+            2,
+            4,
+            5,
+            8,
+            12,
+            13,
+            14,
+            15,
+            19,
+            20,
+            21,
+            22,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            31,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            42,
+            43,
+            46,
+            47
+          ],
+          "xor_data_hex": "2cc3874aff353b94491a2368949bbab9f82fce5aba1dd587ed16bb976f7712caf09626c8dc42380d3134e6c40422a7558f885dbdfde89684136d123d810a19af",
+          "frame_hex": "514f0102c80000000000000008000000ba001e0001000000020000000400000005000000080000000c0000000d0000000e0000000f0000001300000014000000150000001600000018000000190000001a0000001b0000001c0000001d0000001f0000002100000022000000230000002400000025000000260000002a0000002b0000002e0000002f0000002cc3874aff353b94491a2368949bbab9f82fce5aba1dd587ed16bb976f7712caf09626c8dc42380d3134e6c40422a7558f885dbdfde89684136d123d810a19afa53fc038"
+        },
+        {
+          "symbol_id": 9,
+          "degree": 3,
+          "adjacency": [
+            20,
+            26,
+            46
+          ],
+          "xor_data_hex": "77fe68c47b8574ca69c7efd2b4726175c3bf524bf085e312a459794ca104da7004ab9102078a3c1520bf29a8a54509057603934e5128bec75207d5c5161fed24",
+          "frame_hex": "514f0102c800000000000000090000004e000300140000001a0000002e00000077fe68c47b8574ca69c7efd2b4726175c3bf524bf085e312a459794ca104da7004ab9102078a3c1520bf29a8a54509057603934e5128bec75207d5c5161fed2448dfd5b9"
+        },
+        {
+          "symbol_id": 10,
+          "degree": 13,
+          "adjacency": [
+            8,
+            10,
+            11,
+            12,
+            14,
+            17,
+            23,
+            24,
+            33,
+            41,
+            42,
+            44,
+            47
+          ],
+          "xor_data_hex": "963e1c7d1e23922e1380c04577a79528bbde76b7ac7699d6f8040634918eb01238c674169600353e295e5f6a31d10236778df054e959aee3121ef6a1bb53e7e0",
+          "frame_hex": "514f0102c8000000000000000a00000076000d00080000000a0000000b0000000c0000000e00000011000000170000001800000021000000290000002a0000002c0000002f000000963e1c7d1e23922e1380c04577a79528bbde76b7ac7699d6f8040634918eb01238c674169600353e295e5f6a31d10236778df054e959aee3121ef6a1bb53e7e0f8dc1df2"
+        },
+        {
+          "symbol_id": 11,
+          "degree": 8,
+          "adjacency": [
+            0,
+            2,
+            5,
+            8,
+            20,
+            36,
+            37,
+            43
+          ],
+          "xor_data_hex": "bd933adc5e5865d7d266c508d7713105a023ddc1f23c798334d0c017c3f4dfe1ec001b34afd6893035b89a68dba238b807c868baaa763591030e0678d40e8e99",
+          "frame_hex": "514f0102c8000000000000000b00000062000800000000000200000005000000080000001400000024000000250000002b000000bd933adc5e5865d7d266c508d7713105a023ddc1f23c798334d0c017c3f4dfe1ec001b34afd6893035b89a68dba238b807c868baaa763591030e0678d40e8e998d27c394"
+        },
+        {
+          "symbol_id": 12,
+          "degree": 2,
+          "adjacency": [
+            19,
+            47
+          ],
+          "xor_data_hex": "4982275d60e793ae04cfd8cd40c326447cb9d6d2135b885e40c6178d08acc3c80da44270572c4768ab06698ac86a6692609adb6519a0902e99d846efdc9a8649",
+          "frame_hex": "514f0102c8000000000000000c0000004a000200130000002f0000004982275d60e793ae04cfd8cd40c326447cb9d6d2135b885e40c6178d08acc3c80da44270572c4768ab06698ac86a6692609adb6519a0902e99d846efdc9a8649a3a61db0"
+        },
+        {
+          "symbol_id": 13,
+          "degree": 2,
+          "adjacency": [
+            17,
+            25
+          ],
+          "xor_data_hex": "871d4cb3076905f9921903c6c7d19a4f06c7f7445e79868e572d303dbc5e396807c06e22c8617a649c40061cc76f8820dbbebe34f5d6dbd4d0f4fb69c1824122",
+          "frame_hex": "514f0102c8000000000000000d0000004a0002001100000019000000871d4cb3076905f9921903c6c7d19a4f06c7f7445e79868e572d303dbc5e396807c06e22c8617a649c40061cc76f8820dbbebe34f5d6dbd4d0f4fb69c18241225504b466"
+        },
+        {
+          "symbol_id": 14,
+          "degree": 5,
+          "adjacency": [
+            9,
+            16,
+            35,
+            40,
+            44
+          ],
+          "xor_data_hex": "61d0d53161655bfa129439762926ffdf7f5b0138d1ac64a621109a2889949f29a29766eaa682ff9a68d23264b3db35f3f388030112dc2fdefb796b836a624193",
+          "frame_hex": "514f0102c8000000000000000e00000056000500090000001000000023000000280000002c00000061d0d53161655bfa129439762926ffdf7f5b0138d1ac64a621109a2889949f29a29766eaa682ff9a68d23264b3db35f3f388030112dc2fdefb796b836a624193aaa9bf33"
+        },
+        {
+          "symbol_id": 15,
+          "degree": 6,
+          "adjacency": [
+            16,
+            27,
+            33,
+            37,
+            41,
+            42
+          ],
+          "xor_data_hex": "e5ccb329ccf4a16b2acbd83e680c7792ad69665f44d2d915e9e22fd4cf1efd027065be5c9f2ee7098b3856be41dd4baca7a2d13fde4a251e8263f6aafe4d9ec5",
+          "frame_hex": "514f0102c8000000000000000f0000005a000600100000001b0000002100000025000000290000002a000000e5ccb329ccf4a16b2acbd83e680c7792ad69665f44d2d915e9e22fd4cf1efd027065be5c9f2ee7098b3856be41dd4baca7a2d13fde4a251e8263f6aafe4d9ec5481242fa"
+        },
+        {
+          "symbol_id": 16,
+          "degree": 7,
+          "adjacency": [
+            0,
+            16,
+            22,
+            26,
+            28,
+            29,
+            45
+          ],
+          "xor_data_hex": "f1044b30070b5d60b4362e82d80090c245cd1d7af82dab6fa8c996a89a90f9f7554ebb7c97c00a14d753f862f3074c6eac9c285631f1bc13c75c131eeb2ccfb9",
+          "frame_hex": "514f0102c800000000000000100000005e0007000000000010000000160000001a0000001c0000001d0000002d000000f1044b30070b5d60b4362e82d80090c245cd1d7af82dab6fa8c996a89a90f9f7554ebb7c97c00a14d753f862f3074c6eac9c285631f1bc13c75c131eeb2ccfb9a0bbe0ac"
+        },
+        {
+          "symbol_id": 17,
+          "degree": 2,
+          "adjacency": [
+            4,
+            7
+          ],
+          "xor_data_hex": "a99677b964ba011e805918ec0b13eb22ae921a92ecceeb9c928153a0561227d161c152acf3b1dc7ac7730e0b332361a01bcee00e62b4d1da3104585a9d902b8f",
+          "frame_hex": "514f0102c800000000000000110000004a0002000400000007000000a99677b964ba011e805918ec0b13eb22ae921a92ecceeb9c928153a0561227d161c152acf3b1dc7ac7730e0b332361a01bcee00e62b4d1da3104585a9d902b8f79d25030"
+        },
+        {
+          "symbol_id": 18,
+          "degree": 10,
+          "adjacency": [
+            2,
+            7,
+            18,
+            26,
+            27,
+            28,
+            39,
+            43,
+            44,
+            46
+          ],
+          "xor_data_hex": "41209d210ad49b1a69a84248c6bfb31f62f9c6de592351a819759b82311cb66464ee6a085a0218590741d040b88bfb4bc70558bebbcf8e35fcd1ed26024d3601",
+          "frame_hex": "514f0102c800000000000000120000006a000a000200000007000000120000001a0000001b0000001c000000270000002b0000002c0000002e00000041209d210ad49b1a69a84248c6bfb31f62f9c6de592351a819759b82311cb66464ee6a085a0218590741d040b88bfb4bc70558bebbcf8e35fcd1ed26024d360184976544"
+        },
+        {
+          "symbol_id": 19,
+          "degree": 2,
+          "adjacency": [
+            5,
+            33
+          ],
+          "xor_data_hex": "5b83e7936aee6297e70ed4cce7c4c0499f7c827d41ab2157ee7c97a8242d8f92e74e84a15e732f1f34a51301ecc58c058d3f43e4f7ac0513e3727cebaa64f668",
+          "frame_hex": "514f0102c800000000000000130000004a00020005000000210000005b83e7936aee6297e70ed4cce7c4c0499f7c827d41ab2157ee7c97a8242d8f92e74e84a15e732f1f34a51301ecc58c058d3f43e4f7ac0513e3727cebaa64f66816ac280d"
+        },
+        {
+          "symbol_id": 20,
+          "degree": 30,
+          "adjacency": [
+            1,
+            2,
+            4,
+            5,
+            7,
+            8,
+            9,
+            10,
+            13,
+            14,
+            16,
+            19,
+            20,
+            21,
+            22,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            32,
+            34,
+            36,
+            37,
+            39,
+            41,
+            45,
+            47
+          ],
+          "xor_data_hex": "be6d0b9a3c49fb2e2c248caed7bb6f08643ed2b598351bb7f57c8bbce6d07654b8830967664775bf29cf101ed90e57d4f8c770b61a41fac54a4024136c631b93",
+          "frame_hex": "514f0102c80000000000000014000000ba001e00010000000200000004000000050000000700000008000000090000000a0000000d0000000e000000100000001300000014000000150000001600000018000000190000001a0000001b0000001c0000001d0000001e0000002000000022000000240000002500000027000000290000002d0000002f000000be6d0b9a3c49fb2e2c248caed7bb6f08643ed2b598351bb7f57c8bbce6d07654b8830967664775bf29cf101ed90e57d4f8c770b61a41fac54a4024136c631b93e8906d9d"
+        },
+        {
+          "symbol_id": 21,
+          "degree": 2,
+          "adjacency": [
+            25,
+            28
+          ],
+          "xor_data_hex": "1bd4e64152d989a78d3a52d4a662c55b98a0d0dc44eaca0e1d149d17fd3a1b1deadcc8ddeb5578b5df6620c8cb4c5a72120712ce34ff4a14c0710937e6625063",
+          "frame_hex": "514f0102c800000000000000150000004a000200190000001c0000001bd4e64152d989a78d3a52d4a662c55b98a0d0dc44eaca0e1d149d17fd3a1b1deadcc8ddeb5578b5df6620c8cb4c5a72120712ce34ff4a14c0710937e6625063c4e45efe"
+        },
+        {
+          "symbol_id": 22,
+          "degree": 2,
+          "adjacency": [
+            9,
+            32
+          ],
+          "xor_data_hex": "7e66942416eaa51a82dc65de19ec8f4b977cc4c78799d6e0744d978844215bbef7e1b67d17b4b246ace21d4bcd96ceb293b2413c19fde107bca2698ee01944c1",
+          "frame_hex": "514f0102c800000000000000160000004a00020009000000200000007e66942416eaa51a82dc65de19ec8f4b977cc4c78799d6e0744d978844215bbef7e1b67d17b4b246ace21d4bcd96ceb293b2413c19fde107bca2698ee01944c1a32a3e58"
+        },
+        {
+          "symbol_id": 23,
+          "degree": 4,
+          "adjacency": [
+            36,
+            41,
+            43,
+            45
+          ],
+          "xor_data_hex": "f0fbf27575d7076534c9c9658c540c73a74a46ad2e578602b59dd7a781f4f0930662598d2b5fe2ab2b9266f5fa7ab9cf258b4bd3c5b8715f877a97c95d795920",
+          "frame_hex": "514f0102c800000000000000170000005200040024000000290000002b0000002d000000f0fbf27575d7076534c9c9658c540c73a74a46ad2e578602b59dd7a781f4f0930662598d2b5fe2ab2b9266f5fa7ab9cf258b4bd3c5b8715f877a97c95d7959201c9a30f1"
+        },
+        {
+          "symbol_id": 24,
+          "degree": 3,
+          "adjacency": [
+            15,
+            20,
+            33
+          ],
+          "xor_data_hex": "24816dcee8600f9f64abe1fbd666dd9be08641661c41730689b86010e497454ca256546ea7a96ff635e3bfa1dad9e1300ee9523824130fba3eafed85917c3899",
+          "frame_hex": "514f0102c800000000000000180000004e0003000f000000140000002100000024816dcee8600f9f64abe1fbd666dd9be08641661c41730689b86010e497454ca256546ea7a96ff635e3bfa1dad9e1300ee9523824130fba3eafed85917c389908494a52"
+        },
+        {
+          "symbol_id": 25,
+          "degree": 4,
+          "adjacency": [
+            1,
+            3,
+            35,
+            47
+          ],
+          "xor_data_hex": "403007fdd6a15f8efb1d785c0e688a6fee11879539e2467af24035e86da6ca856e823d1d53f32c3770891dffc17cb2d903b6e7328e498afa9ec9bd1061663844",
+          "frame_hex": "514f0102c80000000000000019000000520004000100000003000000230000002f000000403007fdd6a15f8efb1d785c0e688a6fee11879539e2467af24035e86da6ca856e823d1d53f32c3770891dffc17cb2d903b6e7328e498afa9ec9bd1061663844b6539064"
+        },
+        {
+          "symbol_id": 26,
+          "degree": 2,
+          "adjacency": [
+            36,
+            43
+          ],
+          "xor_data_hex": "25d8f38c034ced7d6625f519c5d77552d13576aa07f090a183d216892955dd93f785fa384e9badcdc982810c042e82ce190e1555afe8028f82cb9ae056f0ea15",
+          "frame_hex": "514f0102c8000000000000001a0000004a000200240000002b00000025d8f38c034ced7d6625f519c5d77552d13576aa07f090a183d216892955dd93f785fa384e9badcdc982810c042e82ce190e1555afe8028f82cb9ae056f0ea157f7993f8"
+        },
+        {
+          "symbol_id": 27,
+          "degree": 2,
+          "adjacency": [
+            37,
+            40
+          ],
+          "xor_data_hex": "9936362a79844985656d856651be811cfaf49debbed7bcd96d8d4f78551395b1f7d4ec67ec93f041316c1e9a256e61de5bf7fcefeb99ee3a619cf1e391918708",
+          "frame_hex": "514f0102c8000000000000001b0000004a00020025000000280000009936362a79844985656d856651be811cfaf49debbed7bcd96d8d4f78551395b1f7d4ec67ec93f041316c1e9a256e61de5bf7fcefeb99ee3a619cf1e391918708881199dd"
+        },
+        {
+          "symbol_id": 28,
+          "degree": 7,
+          "adjacency": [
+            4,
+            6,
+            20,
+            23,
+            24,
+            38,
+            41
+          ],
+          "xor_data_hex": "fc79782b174d235bb45001f2406cd3f03395be9346e0f8cd50e5da8bad84a03312d380b73d1ac3ba4161964b2e00128627a9dace31d784ea539b8575c5be2198",
+          "frame_hex": "514f0102c8000000000000001c0000005e00070004000000060000001400000017000000180000002600000029000000fc79782b174d235bb45001f2406cd3f03395be9346e0f8cd50e5da8bad84a03312d380b73d1ac3ba4161964b2e00128627a9dace31d784ea539b8575c5be21987e395d36"
+        },
+        {
+          "symbol_id": 29,
+          "degree": 3,
+          "adjacency": [
+            2,
+            25,
+            32
+          ],
+          "xor_data_hex": "48e039ab502798700330344d8015dc777426c6f4468fd882036e79c5ef67efd7e2cbae782e47a9b2e18fb48954dbb7192ed49f1648a7043547e823de897ea5ed",
+          "frame_hex": "514f0102c8000000000000001d0000004e00030002000000190000002000000048e039ab502798700330344d8015dc777426c6f4468fd882036e79c5ef67efd7e2cbae782e47a9b2e18fb48954dbb7192ed49f1648a7043547e823de897ea5ed415463e6"
+        },
+        {
+          "symbol_id": 30,
+          "degree": 8,
+          "adjacency": [
+            7,
+            15,
+            18,
+            19,
+            25,
+            29,
+            37,
+            44
+          ],
+          "xor_data_hex": "8966bfd4b1ab2e4a71f15abc482765a1b5a3e1984f1c11aee09d22b9b46bdd89ce47a6f7cb34ee57335cc3b3a261eae168db7e230d9be737d6b2b0b934c8f403",
+          "frame_hex": "514f0102c8000000000000001e00000062000800070000000f0000001200000013000000190000001d000000250000002c0000008966bfd4b1ab2e4a71f15abc482765a1b5a3e1984f1c11aee09d22b9b46bdd89ce47a6f7cb34ee57335cc3b3a261eae168db7e230d9be737d6b2b0b934c8f403ec7f3d4f"
+        },
+        {
+          "symbol_id": 31,
+          "degree": 3,
+          "adjacency": [
+            0,
+            12,
+            31
+          ],
+          "xor_data_hex": "d0c33668995668f0cbb660877f3a271f42ac427a1ba248ebb6a662dd046233223b2a614d23410808148cf00e9a09aa260e7d45bff2a1a6c9e84f9f874cb3976e",
+          "frame_hex": "514f0102c8000000000000001f0000004e000300000000000c0000001f000000d0c33668995668f0cbb660877f3a271f42ac427a1ba248ebb6a662dd046233223b2a614d23410808148cf00e9a09aa260e7d45bff2a1a6c9e84f9f874cb3976ec4cca1d8"
+        },
+        {
+          "symbol_id": 32,
+          "degree": 1,
+          "adjacency": [
+            3
+          ],
+          "xor_data_hex": "2045770ec18d113c82f999661ed5ac330ac416a7fcd983208539941b62c40b228e03454bad0ad3575d728ee5db2510c5bf06a58ffd6b4d1f33257b0d4aa5d9e0",
+          "frame_hex": "514f0102c8000000000000002000000046000100030000002045770ec18d113c82f999661ed5ac330ac416a7fcd983208539941b62c40b228e03454bad0ad3575d728ee5db2510c5bf06a58ffd6b4d1f33257b0d4aa5d9e0474289b8"
+        },
+        {
+          "symbol_id": 33,
+          "degree": 4,
+          "adjacency": [
+            10,
+            28,
+            36,
+            39
+          ],
+          "xor_data_hex": "0375b8f3e8a39358e056706ca6b814c5e7547e3be2571d03f692661c8d283101ff3d9cc0c7fc2353a3c9e65ad0b213e671a5b3b7e1911cd8e67ad7f36da7d517",
+          "frame_hex": "514f0102c80000000000000021000000520004000a0000001c00000024000000270000000375b8f3e8a39358e056706ca6b814c5e7547e3be2571d03f692661c8d283101ff3d9cc0c7fc2353a3c9e65ad0b213e671a5b3b7e1911cd8e67ad7f36da7d51730fc4437"
+        },
+        {
+          "symbol_id": 34,
+          "degree": 2,
+          "adjacency": [
+            7,
+            44
+          ],
+          "xor_data_hex": "bb61e8fb8b0e0414bebc1aedde35b10f7cb946f1aadfcab9134672e7a011a3b6409d21ff3ac13d3913a6bcf0ec89153b2b03387ae56ba4df0832d546b466a43e",
+          "frame_hex": "514f0102c800000000000000220000004a000200070000002c000000bb61e8fb8b0e0414bebc1aedde35b10f7cb946f1aadfcab9134672e7a011a3b6409d21ff3ac13d3913a6bcf0ec89153b2b03387ae56ba4df0832d546b466a43effbb3d08"
+        },
+        {
+          "symbol_id": 35,
+          "degree": 1,
+          "adjacency": [
+            37
+          ],
+          "xor_data_hex": "9b79808d1967f83d8ceb2167a09cacb0b101e9c0e535418615b8a6d9bb43be70a4ac0cb24140f0f520fbe9a8729199daf9d177be8d8e5c30c80699977fa1bafc",
+          "frame_hex": "514f0102c8000000000000002300000046000100250000009b79808d1967f83d8ceb2167a09cacb0b101e9c0e535418615b8a6d9bb43be70a4ac0cb24140f0f520fbe9a8729199daf9d177be8d8e5c30c80699977fa1bafcc4d3db91"
+        },
+        {
+          "symbol_id": 36,
+          "degree": 2,
+          "adjacency": [
+            15,
+            39
+          ],
+          "xor_data_hex": "e9422a026dc262bfd5cdf173792ac462eb111db3083aa6f3a6b2dae0e9e15137b49259948028759492b4dad2e0d36d9be70023356b953eadbece280e9eb1b621",
+          "frame_hex": "514f0102c800000000000000240000004a0002000f00000027000000e9422a026dc262bfd5cdf173792ac462eb111db3083aa6f3a6b2dae0e9e15137b49259948028759492b4dad2e0d36d9be70023356b953eadbece280e9eb1b6210ae77db6"
+        },
+        {
+          "symbol_id": 37,
+          "degree": 1,
+          "adjacency": [
+            11
+          ],
+          "xor_data_hex": "443c28b3069694b01272e85f9e68f1a4d5f244a07ed0f80205a427dcb011d960a429d7317bd6fbab4e5ab8e437d052a5e726cb582a78c93b025972d1c07eb8c4",
+          "frame_hex": "514f0102c80000000000000025000000460001000b000000443c28b3069694b01272e85f9e68f1a4d5f244a07ed0f80205a427dcb011d960a429d7317bd6fbab4e5ab8e437d052a5e726cb582a78c93b025972d1c07eb8c48a5fb4f9"
+        },
+        {
+          "symbol_id": 38,
+          "degree": 4,
+          "adjacency": [
+            5,
+            30,
+            42,
+            43
+          ],
+          "xor_data_hex": "e254d9397f3d91fa29681f75a1f7cf4c4f381962760e6baa25565e168cafd5cdacfd14c23e2540ccf069bb8cce5b5715b64bd2e97af6b818c9c081dc17e96f51",
+          "frame_hex": "514f0102c8000000000000002600000052000400050000001e0000002a0000002b000000e254d9397f3d91fa29681f75a1f7cf4c4f381962760e6baa25565e168cafd5cdacfd14c23e2540ccf069bb8cce5b5715b64bd2e97af6b818c9c081dc17e96f5187f0ed12"
+        },
+        {
+          "symbol_id": 39,
+          "degree": 2,
+          "adjacency": [
+            1,
+            16
+          ],
+          "xor_data_hex": "bff19936bfc361633249914eda4a7923401b1dda50380882f23c98f132d5d63f7f0e2516171421b9cd3a8f98ee322ecb40548eb2094ccddafce3cede21635d7b",
+          "frame_hex": "514f0102c800000000000000270000004a0002000100000010000000bff19936bfc361633249914eda4a7923401b1dda50380882f23c98f132d5d63f7f0e2516171421b9cd3a8f98ee322ecb40548eb2094ccddafce3cede21635d7bfd0ec9b0"
+        },
+        {
+          "symbol_id": 40,
+          "degree": 30,
+          "adjacency": [
+            0,
+            1,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            12,
+            13,
+            14,
+            15,
+            17,
+            18,
+            19,
+            20,
+            22,
+            23,
+            26,
+            32,
+            33,
+            34,
+            35,
+            37,
+            38,
+            39,
+            41,
+            42,
+            44,
+            46
+          ],
+          "xor_data_hex": "f6b350a6fbe54d99113258325e4596d8ee39654efa2a52962136e5752f9a425f235498d87ccf1baeb2fce8cf13f1522729a400b22aa7e8d8c456c61d76f888e9",
+          "frame_hex": "514f0102c80000000000000028000000ba001e0000000000010000000400000005000000060000000700000008000000090000000c0000000d0000000e0000000f0000001100000012000000130000001400000016000000170000001a00000020000000210000002200000023000000250000002600000027000000290000002a0000002c0000002e000000f6b350a6fbe54d99113258325e4596d8ee39654efa2a52962136e5752f9a425f235498d87ccf1baeb2fce8cf13f1522729a400b22aa7e8d8c456c61d76f888e9f6075e20"
+        },
+        {
+          "symbol_id": 41,
+          "degree": 3,
+          "adjacency": [
+            2,
+            3,
+            38
+          ],
+          "xor_data_hex": "4a6f0e4452064ffca4add2f2ce0872c297cbcc358e9d05f91975acc10d09c2052fa53ba82f59d433c36129d18690ba61f8c049d93da2a327a876ef1b0d7abbbf",
+          "frame_hex": "514f0102c800000000000000290000004e0003000200000003000000260000004a6f0e4452064ffca4add2f2ce0872c297cbcc358e9d05f91975acc10d09c2052fa53ba82f59d433c36129d18690ba61f8c049d93da2a327a876ef1b0d7abbbf2e6c1a5f"
+        },
+        {
+          "symbol_id": 42,
+          "degree": 2,
+          "adjacency": [
+            8,
+            25
+          ],
+          "xor_data_hex": "7a081bd59c4e3b49dfa27ed35b95e2f78b772dc5a68d9bcf67403a87994f1db2babd334f55c54ebe6df2e03f0a141a809ada318bb760946ab3e73717fe47a9b3",
+          "frame_hex": "514f0102c8000000000000002a0000004a00020008000000190000007a081bd59c4e3b49dfa27ed35b95e2f78b772dc5a68d9bcf67403a87994f1db2babd334f55c54ebe6df2e03f0a141a809ada318bb760946ab3e73717fe47a9b38936450d"
+        },
+        {
+          "symbol_id": 43,
+          "degree": 11,
+          "adjacency": [
+            0,
+            4,
+            5,
+            6,
+            9,
+            13,
+            17,
+            29,
+            33,
+            45,
+            47
+          ],
+          "xor_data_hex": "12e62db0ae1dbd46543a6532b07bb59c71fc273f7baa585a562e6740a2c9298b638319681da540e4060b19a4dceb482fce1227f492c95faf34c4cefc968a5b28",
+          "frame_hex": "514f0102c8000000000000002b0000006e000b0000000000040000000500000006000000090000000d000000110000001d000000210000002d0000002f00000012e62db0ae1dbd46543a6532b07bb59c71fc273f7baa585a562e6740a2c9298b638319681da540e4060b19a4dceb482fce1227f492c95faf34c4cefc968a5b28c0fe51f3"
+        },
+        {
+          "symbol_id": 44,
+          "degree": 2,
+          "adjacency": [
+            8,
+            18
+          ],
+          "xor_data_hex": "e97f62cd9ef76dc1c9a603af676fdb28ba4018ab962de42f4eba174c989d0444d74c8da89f759973bfa5585bf08c390078650a80ca766601f8831c5b496feaf9",
+          "frame_hex": "514f0102c8000000000000002c0000004a0002000800000012000000e97f62cd9ef76dc1c9a603af676fdb28ba4018ab962de42f4eba174c989d0444d74c8da89f759973bfa5585bf08c390078650a80ca766601f8831c5b496feaf9bee2c14e"
+        },
+        {
+          "symbol_id": 45,
+          "degree": 6,
+          "adjacency": [
+            1,
+            4,
+            14,
+            17,
+            25,
+            44
+          ],
+          "xor_data_hex": "ce1ca36ab63e282306b5717556d0781fd25a741f5eb8d6f9542896c224b57dd36cfa05377f3353982d77b06bbb6ab7226f2e2217dd7ee1b0b6bd68ce471e5bee",
+          "frame_hex": "514f0102c8000000000000002d0000005a00060001000000040000000e00000011000000190000002c000000ce1ca36ab63e282306b5717556d0781fd25a741f5eb8d6f9542896c224b57dd36cfa05377f3353982d77b06bbb6ab7226f2e2217dd7ee1b0b6bd68ce471e5bee2a934cd4"
+        },
+        {
+          "symbol_id": 46,
+          "degree": 6,
+          "adjacency": [
+            10,
+            17,
+            19,
+            22,
+            31,
+            37
+          ],
+          "xor_data_hex": "04e9b815ce683f81fd00a1c71f5a1badcace3bdb8a30298c21e4afa27d0fb8fdfefad705879df5aef29d5a6e70c275bb3ab43392e282807dc68a9b220e41dec2",
+          "frame_hex": "514f0102c8000000000000002e0000005a0006000a0000001100000013000000160000001f0000002500000004e9b815ce683f81fd00a1c71f5a1badcace3bdb8a30298c21e4afa27d0fb8fdfefad705879df5aef29d5a6e70c275bb3ab43392e282807dc68a9b220e41dec2ca7e6760"
+        },
+        {
+          "symbol_id": 47,
+          "degree": 7,
+          "adjacency": [
+            1,
+            7,
+            27,
+            32,
+            44,
+            45,
+            46
+          ],
+          "xor_data_hex": "a7b3efaa3635cf5450dad5f4c74595b10bed68ece2d480ec520fa83dbaeb8f9e0666727485fd5abd8d538ef368b5be5f428f3298d2af33b70ec2e6d0eb9a3554",
+          "frame_hex": "514f0102c8000000000000002f0000005e00070001000000070000001b000000200000002c0000002d0000002e000000a7b3efaa3635cf5450dad5f4c74595b10bed68ece2d480ec520fa83dbaeb8f9e0666727485fd5abd8d538ef368b5be5f428f3298d2af33b70ec2e6d0eb9a3554c1102dc0"
+        },
+        {
+          "symbol_id": 48,
+          "degree": 4,
+          "adjacency": [
+            16,
+            24,
+            36,
+            44
+          ],
+          "xor_data_hex": "fed9dd2da0812ad5826254ea89f12754bd3c13a9d286f9dcd29b1b89eb6d6df12ac5bc777261efde671c66744edfcdce8e3d15b07d999d2262e69a9b3d4e9fc9",
+          "frame_hex": "514f0102c80000000000000030000000520004001000000018000000240000002c000000fed9dd2da0812ad5826254ea89f12754bd3c13a9d286f9dcd29b1b89eb6d6df12ac5bc777261efde671c66744edfcdce8e3d15b07d999d2262e69a9b3d4e9fc96597f280"
+        },
+        {
+          "symbol_id": 49,
+          "degree": 5,
+          "adjacency": [
+            7,
+            23,
+            32,
+            34,
+            41
+          ],
+          "xor_data_hex": "e674ca524da05d8a9351cc60ffc4db540e566c3703d1636115f3309bd152308525e60ab34049636cbb4a358d7be548cd8029eb15e7116814cf1d26890dc1c9dc",
+          "frame_hex": "514f0102c80000000000000031000000560005000700000017000000200000002200000029000000e674ca524da05d8a9351cc60ffc4db540e566c3703d1636115f3309bd152308525e60ab34049636cbb4a358d7be548cd8029eb15e7116814cf1d26890dc1c9dcbd284fa3"
+        },
+        {
+          "symbol_id": 50,
+          "degree": 2,
+          "adjacency": [
+            32,
+            47
+          ],
+          "xor_data_hex": "237adb5708012165624eb51e78f4ff490acd8f9891f0905415fb88af0b349cb11d6599005520d800314372c288770acff9275fdd839511b85602ee1cad7d5e29",
+          "frame_hex": "514f0102c800000000000000320000004a000200200000002f000000237adb5708012165624eb51e78f4ff490acd8f9891f0905415fb88af0b349cb11d6599005520d800314372c288770acff9275fdd839511b85602ee1cad7d5e295d8247bf"
+        },
+        {
+          "symbol_id": 51,
+          "degree": 2,
+          "adjacency": [
+            27,
+            47
+          ],
+          "xor_data_hex": "5cb604c5309f1ee3bdfad262e6c83e579fd441ed1d335f33e41723e2e4ddded6d94307e5ae006547079009ffbc25aa0bf59cfd7c7f480b7aeb4bf95dfe6d3525",
+          "frame_hex": "514f0102c800000000000000330000004a0002001b0000002f0000005cb604c5309f1ee3bdfad262e6c83e579fd441ed1d335f33e41723e2e4ddded6d94307e5ae006547079009ffbc25aa0bf59cfd7c7f480b7aeb4bf95dfe6d3525d1c5d7bf"
+        },
+        {
+          "symbol_id": 52,
+          "degree": 2,
+          "adjacency": [
+            15,
+            18
+          ],
+          "xor_data_hex": "40d486b4ca1393a40a1dfe0030605f10f434f4b2f3bfdba873909241753be5462ad325eab18d1dbc4552010665ee8616e62f94b138f8a54838f2a953decba269",
+          "frame_hex": "514f0102c800000000000000340000004a0002000f0000001200000040d486b4ca1393a40a1dfe0030605f10f434f4b2f3bfdba873909241753be5462ad325eab18d1dbc4552010665ee8616e62f94b138f8a54838f2a953decba26964b29cfb"
+        },
+        {
+          "symbol_id": 53,
+          "degree": 2,
+          "adjacency": [
+            13,
+            25
+          ],
+          "xor_data_hex": "5879ff98b0ef51599984fe849a7edbc2884fa5fc2feee57052dfe2a4c95866c19cd30a24ff454b9d037f2370390f321db656bd9740f14c0851c1743308600b4e",
+          "frame_hex": "514f0102c800000000000000350000004a0002000d000000190000005879ff98b0ef51599984fe849a7edbc2884fa5fc2feee57052dfe2a4c95866c19cd30a24ff454b9d037f2370390f321db656bd9740f14c0851c1743308600b4e5977fcc1"
+        },
+        {
+          "symbol_id": 54,
+          "degree": 5,
+          "adjacency": [
+            7,
+            12,
+            18,
+            28,
+            32
+          ],
+          "xor_data_hex": "584ef33d6af5afa1b1cfd84cc7607988b30a92a74e41181784c556d2810094095d8b33eae20639b03b4961071de637d88032027d192ea00b95a47b90cea7c3f6",
+          "frame_hex": "514f0102c8000000000000003600000056000500070000000c000000120000001c00000020000000584ef33d6af5afa1b1cfd84cc7607988b30a92a74e41181784c556d2810094095d8b33eae20639b03b4961071de637d88032027d192ea00b95a47b90cea7c3f6d33c006d"
+        },
+        {
+          "symbol_id": 55,
+          "degree": 2,
+          "adjacency": [
+            5,
+            27
+          ],
+          "xor_data_hex": "c897a8045e5cab9f92f1ab03848096c2484d2137fcf4753b89c92e09f559cd7c9d2b911b571f1ada1a6c209ef46db9c3c431735c12583ccba2a6dd2c199c3344",
+          "frame_hex": "514f0102c800000000000000370000004a000200050000001b000000c897a8045e5cab9f92f1ab03848096c2484d2137fcf4753b89c92e09f559cd7c9d2b911b571f1ada1a6c209ef46db9c3c431735c12583ccba2a6dd2c199c3344a34e634a"
+        },
+        {
+          "symbol_id": 56,
+          "degree": 30,
+          "adjacency": [
+            1,
+            3,
+            4,
+            5,
+            6,
+            9,
+            10,
+            11,
+            12,
+            13,
+            15,
+            17,
+            20,
+            21,
+            22,
+            23,
+            26,
+            27,
+            28,
+            30,
+            34,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            45,
+            46
+          ],
+          "xor_data_hex": "d802bd64339252b4b741c21de20abb81b67086f2c21703a901bf3382d30b0434ac70296b935119441e868802ac63bd352c0aaaa11e20bb1c3e9edaddc040c9ea",
+          "frame_hex": "514f0102c80000000000000038000000ba001e000100000003000000040000000500000006000000090000000a0000000b0000000c0000000d0000000f00000011000000140000001500000016000000170000001a0000001b0000001c0000001e0000002200000025000000260000002700000028000000290000002a0000002b0000002d0000002e000000d802bd64339252b4b741c21de20abb81b67086f2c21703a901bf3382d30b0434ac70296b935119441e868802ac63bd352c0aaaa11e20bb1c3e9edaddc040c9ea77e27a81"
+        },
+        {
+          "symbol_id": 57,
+          "degree": 6,
+          "adjacency": [
+            0,
+            11,
+            13,
+            18,
+            40,
+            44
+          ],
+          "xor_data_hex": "14e6dc0c68e6978c5b30053b65100404f07d62dbd9b1904c4d8855fbe899fe993aa29e67b691dd2f64b392224381f0b80b3a09ff0eb5aa94cdc162207ffea6a2",
+          "frame_hex": "514f0102c800000000000000390000005a000600000000000b0000000d00000012000000280000002c00000014e6dc0c68e6978c5b30053b65100404f07d62dbd9b1904c4d8855fbe899fe993aa29e67b691dd2f64b392224381f0b80b3a09ff0eb5aa94cdc162207ffea6a20831f4f8"
+        },
+        {
+          "symbol_id": 58,
+          "degree": 14,
+          "adjacency": [
+            7,
+            8,
+            9,
+            10,
+            15,
+            18,
+            19,
+            21,
+            22,
+            36,
+            38,
+            39,
+            41,
+            46
+          ],
+          "xor_data_hex": "078cb5bf743073072a9be8281b0591da24ec33f9eebfdffab211bc6fead83a9a209ba303238530fbef99d439eded1b2869e71c14a7d9296c8158e51373336690",
+          "frame_hex": "514f0102c8000000000000003a0000007a000e000700000008000000090000000a0000000f00000012000000130000001500000016000000240000002600000027000000290000002e000000078cb5bf743073072a9be8281b0591da24ec33f9eebfdffab211bc6fead83a9a209ba303238530fbef99d439eded1b2869e71c14a7d9296c8158e5137333669093fea9b1"
+        },
+        {
+          "symbol_id": 59,
+          "degree": 3,
+          "adjacency": [
+            1,
+            3,
+            23
+          ],
+          "xor_data_hex": "96201785487bc5ddffd7f66975688f2ce1b082829b9180ac1cfe5e1c5dfe3c02275335927ac3a0810ccf7fbf0b7f79c62a052071db7f306b9e58bb81da1f5713",
+          "frame_hex": "514f0102c8000000000000003b0000004e00030001000000030000001700000096201785487bc5ddffd7f66975688f2ce1b082829b9180ac1cfe5e1c5dfe3c02275335927ac3a0810ccf7fbf0b7f79c62a052071db7f306b9e58bb81da1f5713935bc1c8"
+        },
+        {
+          "symbol_id": 60,
+          "degree": 7,
+          "adjacency": [
+            7,
+            8,
+            10,
+            36,
+            39,
+            41,
+            47
+          ],
+          "xor_data_hex": "0534d1c68f2015be9da23efb2fefaae13fcaa9e1d6d32ed34fcdca4de0bcaad8080f40b62261de7b96c5ba247d8f13c6c07c2a982067691d7524374108072ef6",
+          "frame_hex": "514f0102c8000000000000003c0000005e00070007000000080000000a0000002400000027000000290000002f0000000534d1c68f2015be9da23efb2fefaae13fcaa9e1d6d32ed34fcdca4de0bcaad8080f40b62261de7b96c5ba247d8f13c6c07c2a982067691d7524374108072ef61f587d6d"
+        },
+        {
+          "symbol_id": 61,
+          "degree": 6,
+          "adjacency": [
+            18,
+            24,
+            28,
+            32,
+            40,
+            44
+          ],
+          "xor_data_hex": "5739748e89cf778f386b130a1221390cd7a68f7c0d1f29684b33639777df34fc1d5c6d7806d168607e2c516219a257b5ce8c67c15367bc865d25d6647db7e07d",
+          "frame_hex": "514f0102c8000000000000003d0000005a00060012000000180000001c00000020000000280000002c0000005739748e89cf778f386b130a1221390cd7a68f7c0d1f29684b33639777df34fc1d5c6d7806d168607e2c516219a257b5ce8c67c15367bc865d25d6647db7e07dc859ab6c"
+        },
+        {
+          "symbol_id": 62,
+          "degree": 2,
+          "adjacency": [
+            43,
+            45
+          ],
+          "xor_data_hex": "8bfb9cde61721c6875baa0ea6137ca294fda3b1740c0388c8751cdb7131e6ccde60299524e078a980bff0d0972d3f30904800dbaf759952129c7abfc303a011b",
+          "frame_hex": "514f0102c8000000000000003e0000004a0002002b0000002d0000008bfb9cde61721c6875baa0ea6137ca294fda3b1740c0388c8751cdb7131e6ccde60299524e078a980bff0d0972d3f30904800dbaf759952129c7abfc303a011b1da53a33"
+        },
+        {
+          "symbol_id": 63,
+          "degree": 3,
+          "adjacency": [
+            26,
+            31,
+            38
+          ],
+          "xor_data_hex": "3ddaf2d74152700536500dbd9a9b8ab70af0afb761c66cbeb36e44c35b0349858ea9d175a15652029c2c95ea6602308e3538f8790246a6e24c695224fdcfc86f",
+          "frame_hex": "514f0102c8000000000000003f0000004e0003001a0000001f000000260000003ddaf2d74152700536500dbd9a9b8ab70af0afb761c66cbeb36e44c35b0349858ea9d175a15652029c2c95ea6602308e3538f8790246a6e24c695224fdcfc86fb193ef4b"
+        },
+        {
+          "symbol_id": 64,
+          "degree": 5,
+          "adjacency": [
+            3,
+            20,
+            21,
+            24,
+            32
+          ],
+          "xor_data_hex": "f36834a8554d87e73b43767995fd9e6ca2c3c2b7c9cfbcc4f4995ef69265de22d997b955575976ceb860667319fccdff1e9f74058a7d9a5fd7cd610bbbf8d9a1",
+          "frame_hex": "514f0102c80000000000000040000000560005000300000014000000150000001800000020000000f36834a8554d87e73b43767995fd9e6ca2c3c2b7c9cfbcc4f4995ef69265de22d997b955575976ceb860667319fccdff1e9f74058a7d9a5fd7cd610bbbf8d9a1a1449248"
+        },
+        {
+          "symbol_id": 65,
+          "degree": 8,
+          "adjacency": [
+            0,
+            3,
+            7,
+            20,
+            30,
+            31,
+            32,
+            42
+          ],
+          "xor_data_hex": "cb20612a145e194a5560d1f0a25149dc7111b9483ce3ff235fe2d422d702a5fbf5b2bd21e24c6fdb7997641d34b2f143ed55fc36948f27205ffe499cb5a102b0",
+          "frame_hex": "514f0102c8000000000000004100000062000800000000000300000007000000140000001e0000001f000000200000002a000000cb20612a145e194a5560d1f0a25149dc7111b9483ce3ff235fe2d422d702a5fbf5b2bd21e24c6fdb7997641d34b2f143ed55fc36948f27205ffe499cb5a102b031af8e8b"
+        },
+        {
+          "symbol_id": 66,
+          "degree": 2,
+          "adjacency": [
+            27,
+            44
+          ],
+          "xor_data_hex": "285e49e5871d5f0fedd7efa19523c3599205f34914174da659c1764ef1bbbaa95da7f3e70e282ef603b5bfa2e98b2f563243a7c2eb856c2e020775fb3dfbef75",
+          "frame_hex": "514f0102c800000000000000420000004a0002001b0000002c000000285e49e5871d5f0fedd7efa19523c3599205f34914174da659c1764ef1bbbaa95da7f3e70e282ef603b5bfa2e98b2f563243a7c2eb856c2e020775fb3dfbef756854534a"
+        },
+        {
+          "symbol_id": 67,
+          "degree": 2,
+          "adjacency": [
+            12,
+            17
+          ],
+          "xor_data_hex": "e87112e6c809bfbc5296c9f1bc403927325eaf3f436ef3bf44468b0a8c6c073a444f2c063d4ad2699537b61fbd55de234ebb7836dec1ae42a9575289dc6ca3a9",
+          "frame_hex": "514f0102c800000000000000430000004a0002000c00000011000000e87112e6c809bfbc5296c9f1bc403927325eaf3f436ef3bf44468b0a8c6c073a444f2c063d4ad2699537b61fbd55de234ebb7836dec1ae42a9575289dc6ca3a94db2f4b7"
+        },
+        {
+          "symbol_id": 68,
+          "degree": 2,
+          "adjacency": [
+            15,
+            16
+          ],
+          "xor_data_hex": "c65c3fca9923132f50c979f9435ad0094026b487ac46381add9ed2012c32250f7af43c228b267fd60a695f371ce4ac26eb3f6ee64fb65ed547bd964304a5d814",
+          "frame_hex": "514f0102c800000000000000440000004a0002000f00000010000000c65c3fca9923132f50c979f9435ad0094026b487ac46381add9ed2012c32250f7af43c228b267fd60a695f371ce4ac26eb3f6ee64fb65ed547bd964304a5d8145e03dff7"
+        },
+        {
+          "symbol_id": 69,
+          "degree": 2,
+          "adjacency": [
+            0,
+            11
+          ],
+          "xor_data_hex": "3ca0290b0dd160096d1b1f01415d36bb0f2134c69439e516f34e2699db25ce101c1c3e738e9f0a7aa029485982479c7c3a2a5e8cc188c1a997b2d98ded100902",
+          "frame_hex": "514f0102c800000000000000450000004a000200000000000b0000003ca0290b0dd160096d1b1f01415d36bb0f2134c69439e516f34e2699db25ce101c1c3e738e9f0a7aa029485982479c7c3a2a5e8cc188c1a997b2d98ded100902879d903d"
+        },
+        {
+          "symbol_id": 70,
+          "degree": 30,
+          "adjacency": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            8,
+            10,
+            11,
+            12,
+            13,
+            15,
+            16,
+            17,
+            19,
+            20,
+            22,
+            24,
+            29,
+            30,
+            31,
+            34,
+            37,
+            38,
+            39,
+            40,
+            41,
+            44,
+            45,
+            47
+          ],
+          "xor_data_hex": "824b5a9f60a08f107f330b831cf8cda102d80cd62881d3cbe3ecadb113446473e729614908f4b144a8a0ce4138a462fd9c4a821f2e504b42333525b5b82d039d",
+          "frame_hex": "514f0102c80000000000000046000000ba001e00000000000100000002000000030000000400000005000000080000000a0000000b0000000c0000000d0000000f0000001000000011000000130000001400000016000000180000001d0000001e0000001f0000002200000025000000260000002700000028000000290000002c0000002d0000002f000000824b5a9f60a08f107f330b831cf8cda102d80cd62881d3cbe3ecadb113446473e729614908f4b144a8a0ce4138a462fd9c4a821f2e504b42333525b5b82d039d97768495"
+        },
+        {
+          "symbol_id": 71,
+          "degree": 3,
+          "adjacency": [
+            1,
+            42,
+            47
+          ],
+          "xor_data_hex": "6fab5c7fcb7a80cd206b5266a8e021033163ef9939987e40044884d72b6a8d1cb288705b01f2be2bd82b9535109419cf82f1c0258cb3e51cf6e487561902c031",
+          "frame_hex": "514f0102c800000000000000470000004e000300010000002a0000002f0000006fab5c7fcb7a80cd206b5266a8e021033163ef9939987e40044884d72b6a8d1cb288705b01f2be2bd82b9535109419cf82f1c0258cb3e51cf6e487561902c031d0021fb2"
+        },
+        {
+          "symbol_id": 72,
+          "degree": 2,
+          "adjacency": [
+            6,
+            43
+          ],
+          "xor_data_hex": "ad3f438917d3df0617f51c12c6a97a29127d21794de613b85ca204d9068fb01343e186da4b650cfdf2d676f2304a7278a606cd6688542752b7b7efe6ea8cc40a",
+          "frame_hex": "514f0102c800000000000000480000004a000200060000002b000000ad3f438917d3df0617f51c12c6a97a29127d21794de613b85ca204d9068fb01343e186da4b650cfdf2d676f2304a7278a606cd6688542752b7b7efe6ea8cc40a85d308f7"
+        },
+        {
+          "symbol_id": 73,
+          "degree": 2,
+          "adjacency": [
+            11,
+            25
+          ],
+          "xor_data_hex": "174e640ec7ee3ae674d347bc6d2b6488805310036bc768b21d8fd50143882aa8e41c9c3882d76be6579589235088d02517521bfba39b76ead237352698f0aad7",
+          "frame_hex": "514f0102c800000000000000490000004a0002000b00000019000000174e640ec7ee3ae674d347bc6d2b6488805310036bc768b21d8fd50143882aa8e41c9c3882d76be6579589235088d02517521bfba39b76ead237352698f0aad73d189993"
+        },
+        {
+          "symbol_id": 74,
+          "degree": 30,
+          "adjacency": [
+            2,
+            4,
+            7,
+            8,
+            9,
+            10,
+            11,
+            15,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            28,
+            29,
+            30,
+            31,
+            33,
+            36,
+            37,
+            38,
+            41,
+            43,
+            45,
+            46,
+            47
+          ],
+          "xor_data_hex": "014fe58dc8a57fc26dc0c07e97a15461822a7e54a3bc8a6d6f2884890123c9a32a8d77cefa411b989db8442ad167ef131e79a448e811c4be74c2c7bf04993b11",
+          "frame_hex": "514f0102c8000000000000004a000000ba001e0002000000040000000700000008000000090000000a0000000b0000000f00000012000000130000001400000015000000160000001700000018000000190000001a0000001c0000001d0000001e0000001f00000021000000240000002500000026000000290000002b0000002d0000002e0000002f000000014fe58dc8a57fc26dc0c07e97a15461822a7e54a3bc8a6d6f2884890123c9a32a8d77cefa411b989db8442ad167ef131e79a448e811c4be74c2c7bf04993b11d2bc8965"
+        },
+        {
+          "symbol_id": 75,
+          "degree": 2,
+          "adjacency": [
+            0,
+            39
+          ],
+          "xor_data_hex": "110f98ab6f57fd7cd01c2ab259c6f09ea160f8aa34db8f1f121996f205a5493f0bb060d2f75dde79f20da2caad6a8454cee8c9f84c68decd88dd46ba82b2f4d7",
+          "frame_hex": "514f0102c8000000000000004b0000004a0002000000000027000000110f98ab6f57fd7cd01c2ab259c6f09ea160f8aa34db8f1f121996f205a5493f0bb060d2f75dde79f20da2caad6a8454cee8c9f84c68decd88dd46ba82b2f4d7fb19f9f1"
+        },
+        {
+          "symbol_id": 76,
+          "degree": 3,
+          "adjacency": [
+            6,
+            23,
+            30
+          ],
+          "xor_data_hex": "02840a8544a1afac4cd3476fc64b1fec50cb237d84ff2fd689a519f48ff4cc48b0ac04645a64fe5196d58070769746693612d474351530936c030d91932ce3f8",
+          "frame_hex": "514f0102c8000000000000004c0000004e00030006000000170000001e00000002840a8544a1afac4cd3476fc64b1fec50cb237d84ff2fd689a519f48ff4cc48b0ac04645a64fe5196d58070769746693612d474351530936c030d91932ce3f8e56e4688"
+        },
+        {
+          "symbol_id": 77,
+          "degree": 6,
+          "adjacency": [
+            2,
+            3,
+            4,
+            11,
+            17,
+            40
+          ],
+          "xor_data_hex": "ecae9537a081cc3ee4a2686fe8626e69331576c31fd87b958501efda87ed53952484aca4a151896c9ec305c22acd7e54015919b39cf2ea26898256b96b0ab3d7",
+          "frame_hex": "514f0102c8000000000000004d0000005a0006000200000003000000040000000b0000001100000028000000ecae9537a081cc3ee4a2686fe8626e69331576c31fd87b958501efda87ed53952484aca4a151896c9ec305c22acd7e54015919b39cf2ea26898256b96b0ab3d79fa14e0b"
+        },
+        {
+          "symbol_id": 78,
+          "degree": 2,
+          "adjacency": [
+            4,
+            27
+          ],
+          "xor_data_hex": "3aa9d6a768a95a05d332eda040059974402eaf2a52066c83d806570907b83ece7cfb80b4c758cfb5d7600d5936215bcd028e7fb66c5a192b3b31f8e7140d60c4",
+          "frame_hex": "514f0102c8000000000000004e0000004a000200040000001b0000003aa9d6a768a95a05d332eda040059974402eaf2a52066c83d806570907b83ece7cfb80b4c758cfb5d7600d5936215bcd028e7fb66c5a192b3b31f8e7140d60c41a5fa09c"
+        },
+        {
+          "symbol_id": 79,
+          "degree": 3,
+          "adjacency": [
+            14,
+            24,
+            37
+          ],
+          "xor_data_hex": "b3b42efc6e79b04a462a8583f0f6a46715f0290333f0d7ac555cc12f370967fcbcaf4b515e8368045b6c4f4d79962e6980e96c92c3cfa8b34f3be48868461307",
+          "frame_hex": "514f0102c8000000000000004f0000004e0003000e0000001800000025000000b3b42efc6e79b04a462a8583f0f6a46715f0290333f0d7ac555cc12f370967fcbcaf4b515e8368045b6c4f4d79962e6980e96c92c3cfa8b34f3be488684613070adc0148"
+        },
+        {
+          "symbol_id": 80,
+          "degree": 2,
+          "adjacency": [
+            0,
+            27
+          ],
+          "xor_data_hex": "b1c58d7d3bd8ea5ac293253c39fdf9484507318bf7da422712fd22a78fe9c9a66176eea75b499496e9e3f94209b264d2289068a894b803e87ea05201d30384e3",
+          "frame_hex": "514f0102c800000000000000500000004a000200000000001b000000b1c58d7d3bd8ea5ac293253c39fdf9484507318bf7da422712fd22a78fe9c9a66176eea75b499496e9e3f94209b264d2289068a894b803e87ea05201d30384e39b9ad7e8"
+        },
+        {
+          "symbol_id": 81,
+          "degree": 2,
+          "adjacency": [
+            11,
+            38
+          ],
+          "xor_data_hex": "831177b80c43dd3333f98d7b4517994763b783fdcefca6bd97561cb1c81690e9ba14d5a37be31d30194ae85cd191c75787673766a8608d5f588e6cf2fb2c334c",
+          "frame_hex": "514f0102c800000000000000510000004a0002000b00000026000000831177b80c43dd3333f98d7b4517994763b783fdcefca6bd97561cb1c81690e9ba14d5a37be31d30194ae85cd191c75787673766a8608d5f588e6cf2fb2c334c73cc13bc"
+        },
+        {
+          "symbol_id": 82,
+          "degree": 8,
+          "adjacency": [
+            0,
+            12,
+            16,
+            17,
+            21,
+            33,
+            34,
+            40
+          ],
+          "xor_data_hex": "720adcc90291ad12e83af81a78d73d3027f347a9551b828862060a0134270d4b59b4b3e81e601d62c35143a734abe5e4a495001d2dcf97cc5236ab5223c5b6cf",
+          "frame_hex": "514f0102c8000000000000005200000062000800000000000c000000100000001100000015000000210000002200000028000000720adcc90291ad12e83af81a78d73d3027f347a9551b828862060a0134270d4b59b4b3e81e601d62c35143a734abe5e4a495001d2dcf97cc5236ab5223c5b6cf697b61df"
+        },
+        {
+          "symbol_id": 83,
+          "degree": 3,
+          "adjacency": [
+            26,
+            30,
+            43
+          ],
+          "xor_data_hex": "8e14b48e22380ca13b1a6ace64af28037caffc2dac86b9fd4bb38551a02f5ef748c16992a387f0295d5c1bf72ec0ede9b9e1c12c2a5997d2acb829451f914a89",
+          "frame_hex": "514f0102c800000000000000530000004e0003001a0000001e0000002b0000008e14b48e22380ca13b1a6ace64af28037caffc2dac86b9fd4bb38551a02f5ef748c16992a387f0295d5c1bf72ec0ede9b9e1c12c2a5997d2acb829451f914a893c148cc3"
+        },
+        {
+          "symbol_id": 84,
+          "degree": 10,
+          "adjacency": [
+            0,
+            2,
+            9,
+            13,
+            30,
+            32,
+            34,
+            38,
+            46,
+            47
+          ],
+          "xor_data_hex": "ee854aab8b9339b9fdc104470cf9755bbd22b35906682c79180cab315f7fa333383bcb142d9a49c845e0690c6a8c71c1a17c788ed6cd52d41b0e832e56a2b111",
+          "frame_hex": "514f0102c800000000000000540000006a000a000000000002000000090000000d0000001e0000002000000022000000260000002e0000002f000000ee854aab8b9339b9fdc104470cf9755bbd22b35906682c79180cab315f7fa333383bcb142d9a49c845e0690c6a8c71c1a17c788ed6cd52d41b0e832e56a2b111da502a24"
+        },
+        {
+          "symbol_id": 85,
+          "degree": 1,
+          "adjacency": [
+            31
+          ],
+          "xor_data_hex": "944125389c09885a12f1f20d28ddd644f9473ec4f94bb07e4b0c2a72acfde9c880a58122da22c199ea47817732fcb07cb600c6cabba5641cd469dacc24bdd630",
+          "frame_hex": "514f0102c80000000000000055000000460001001f000000944125389c09885a12f1f20d28ddd644f9473ec4f94bb07e4b0c2a72acfde9c880a58122da22c199ea47817732fcb07cb600c6cabba5641cd469dacc24bdd6309afbffde"
+        },
+        {
+          "symbol_id": 86,
+          "degree": 10,
+          "adjacency": [
+            5,
+            6,
+            8,
+            10,
+            16,
+            25,
+            26,
+            33,
+            41,
+            46
+          ],
+          "xor_data_hex": "ec560fb7665e18a8b9998c60b7f98f44177e1178555ef55b5f545c8a9f3c048f13c344809479e58ebd6ac498a459ecc0d2403d500f9b3edc0e863bc450ee224d",
+          "frame_hex": "514f0102c800000000000000560000006a000a000500000006000000080000000a00000010000000190000001a00000021000000290000002e000000ec560fb7665e18a8b9998c60b7f98f44177e1178555ef55b5f545c8a9f3c048f13c344809479e58ebd6ac498a459ecc0d2403d500f9b3edc0e863bc450ee224d25ef2fe9"
+        },
+        {
+          "symbol_id": 87,
+          "degree": 2,
+          "adjacency": [
+            14,
+            44
+          ],
+          "xor_data_hex": "438da056c653700ae25c895951051fba9bf851be658267a752f7d5b3e21958ebcc6f2574c004875d285eeadbfcf96b3f1c0d81a4b14d53c8ae950f6878573972",
+          "frame_hex": "514f0102c800000000000000570000004a0002000e0000002c000000438da056c653700ae25c895951051fba9bf851be658267a752f7d5b3e21958ebcc6f2574c004875d285eeadbfcf96b3f1c0d81a4b14d53c8ae950f687857397277b16832"
+        },
+        {
+          "symbol_id": 88,
+          "degree": 2,
+          "adjacency": [
+            40,
+            42
+          ],
+          "xor_data_hex": "0177773584ab2843d1d5324f3f0b5666ea09a790480c877f119e6ad15cad5a95e31d59beb22fbacc80253a0d4d9344307f58d43960532ceb47d87257e3998b9a",
+          "frame_hex": "514f0102c800000000000000580000004a000200280000002a0000000177773584ab2843d1d5324f3f0b5666ea09a790480c877f119e6ad15cad5a95e31d59beb22fbacc80253a0d4d9344307f58d43960532ceb47d87257e3998b9a17c6acb9"
+        },
+        {
+          "symbol_id": 89,
+          "degree": 7,
+          "adjacency": [
+            4,
+            10,
+            20,
+            26,
+            32,
+            39,
+            42
+          ],
+          "xor_data_hex": "4e3110107c5120fe6caa47a5129e0675711c8b1c278a5414ce70a2a02eec2d00c8704e18ab28c6f1161cf8970d975ab011a84f0a8239ab2bc44b31cdf16da0d2",
+          "frame_hex": "514f0102c800000000000000590000005e000700040000000a000000140000001a00000020000000270000002a0000004e3110107c5120fe6caa47a5129e0675711c8b1c278a5414ce70a2a02eec2d00c8704e18ab28c6f1161cf8970d975ab011a84f0a8239ab2bc44b31cdf16da0d23805e108"
+        },
+        {
+          "symbol_id": 90,
+          "degree": 4,
+          "adjacency": [
+            3,
+            12,
+            15,
+            47
+          ],
+          "xor_data_hex": "09655ef7c6476e555e6fd02d69de6994fb5e8f0022d15259cc3890a6261fc9c08aae9c62231cb12bc30087843e69e3502e93cc3793926faa391050f23ea8da48",
+          "frame_hex": "514f0102c8000000000000005a00000052000400030000000c0000000f0000002f00000009655ef7c6476e555e6fd02d69de6994fb5e8f0022d15259cc3890a6261fc9c08aae9c62231cb12bc30087843e69e3502e93cc3793926faa391050f23ea8da48c0d5e100"
+        },
+        {
+          "symbol_id": 91,
+          "degree": 2,
+          "adjacency": [
+            21,
+            39
+          ],
+          "xor_data_hex": "78715f681b8174e4da27f75aab985650d360c623aa92920267368518b87f24eaaf9bec2e507163640db33f2476799d42af2ff2a84a78055258f097dab25e6a00",
+          "frame_hex": "514f0102c8000000000000005b0000004a000200150000002700000078715f681b8174e4da27f75aab985650d360c623aa92920267368518b87f24eaaf9bec2e507163640db33f2476799d42af2ff2a84a78055258f097dab25e6a00bad777d6"
+        },
+        {
+          "symbol_id": 92,
+          "degree": 17,
+          "adjacency": [
+            1,
+            3,
+            4,
+            9,
+            12,
+            15,
+            16,
+            17,
+            19,
+            21,
+            22,
+            23,
+            26,
+            31,
+            32,
+            39,
+            45
+          ],
+          "xor_data_hex": "e4c0ffbbf7b06de0fce55872ad2c581caa7c6dfe30e5bd8ba85bba7433b892571e6ea103b9ee2fca2fc159419958aa6ad264dad081f9a0c6c804ed8caa60cc2e",
+          "frame_hex": "514f0102c8000000000000005c00000086001100010000000300000004000000090000000c0000000f0000001000000011000000130000001500000016000000170000001a0000001f00000020000000270000002d000000e4c0ffbbf7b06de0fce55872ad2c581caa7c6dfe30e5bd8ba85bba7433b892571e6ea103b9ee2fca2fc159419958aa6ad264dad081f9a0c6c804ed8caa60cc2e62c6b1be"
+        },
+        {
+          "symbol_id": 93,
+          "degree": 2,
+          "adjacency": [
+            7,
+            10
+          ],
+          "xor_data_hex": "ab32f916a2a39269caa75ba8eca92ce1723f25f1d5ec0929e6998fb0761186b3a16271bfe9e94713deeb525780978b8d983dd1f58b9d7087a52696726c51887c",
+          "frame_hex": "514f0102c8000000000000005d0000004a000200070000000a000000ab32f916a2a39269caa75ba8eca92ce1723f25f1d5ec0929e6998fb0761186b3a16271bfe9e94713deeb525780978b8d983dd1f58b9d7087a52696726c51887cd3eec665"
+        },
+        {
+          "symbol_id": 94,
+          "degree": 1,
+          "adjacency": [
+            4
+          ],
+          "xor_data_hex": "f3f05a62583644e66ec83fc2a6cda723dffaeec74f3533b03c1174ebe365e018a5b887516958aaf2d0f004a68a04f1c6f71282ca13121251d07a01baea6055e1",
+          "frame_hex": "514f0102c8000000000000005e0000004600010004000000f3f05a62583644e66ec83fc2a6cda723dffaeec74f3533b03c1174ebe365e018a5b887516958aaf2d0f004a68a04f1c6f71282ca13121251d07a01baea6055e1962ca022"
+        },
+        {
+          "symbol_id": 95,
+          "degree": 30,
+          "adjacency": [
+            0,
+            1,
+            2,
+            3,
+            5,
+            6,
+            7,
+            9,
+            10,
+            11,
+            13,
+            14,
+            15,
+            17,
+            19,
+            20,
+            21,
+            24,
+            25,
+            26,
+            27,
+            30,
+            31,
+            34,
+            36,
+            37,
+            38,
+            40,
+            41,
+            45
+          ],
+          "xor_data_hex": "f69c78610d9b189d21f0c0eb787651f651f1fa57fb18697972b5e6c12af6ea3f0ee714e10f48b0381b938dcb9a43141391b2f45e5e5b16939c464b4d22b4d0fc",
+          "frame_hex": "514f0102c8000000000000005f000000ba001e0000000000010000000200000003000000050000000600000007000000090000000a0000000b0000000d0000000e0000000f0000001100000013000000140000001500000018000000190000001a0000001b0000001e0000001f0000002200000024000000250000002600000028000000290000002d000000f69c78610d9b189d21f0c0eb787651f651f1fa57fb18697972b5e6c12af6ea3f0ee714e10f48b0381b938dcb9a43141391b2f45e5e5b16939c464b4d22b4d0fc4c14884f"
+        }
+      ]
+    }
+  ]
+}
