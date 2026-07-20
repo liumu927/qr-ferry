@@ -1,0 +1,15 @@
+# ===== qr-ferry 依赖 =====
+#
+# M1（协议核心层）：零第三方依赖，仅用 Python 标准库
+#   zlib / hashlib / struct / random
+#
+# M2 依赖（PC 双端链路）
+PySide6==6.8.3   # UI 框架（锁定 6.8 LTS；6.11+ 在 anaconda venv 有 DLL 加载问题）
+opencv-python    # 摄像头采集与图像预处理
+zxing-cpp        # QR 解码（多码识别）
+segno            # QR 编码（纯 Python，二进制安全，避开 python-qrcode 的 glog(0) bug）
+Pillow           # 图像处理（qrcode 依赖）
+numpy            # 图像数组运算
+#
+# 开发依赖
+pytest           # 单元测试

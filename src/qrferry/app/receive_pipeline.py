@@ -1,0 +1,90 @@
+"""接收流水线 —— 图像 → 解码 → 会话 → 落盘 的纯逻辑层。
+
+与 Qt/摄像头解耦：上层（UI/控制器）负责采集帧图像传入，本模块负责
+解码多码 → CRC 校验 → 驱动 ReceiveSession → 完成后解压 + SHA-256 校验 + 落盘/文本。
+"""
+from __future__ import annotations
+
+import hashlib
+import os
+import zlib
+from dataclasses import dataclass
+
+from qrferry.core.frame import Compression, ContentType, ProtocolError, decode_frame
+from qrferry.core.session import ReceiveSession
+from qrferry.qr.backend import CodecBackend, StandardQrBackend
+
+__all__ = ["ReceiveResult", "ReceivePipeline", "safe_filename"]
+
+
+@dataclass
+class ReceiveResult:
+    content_type: int
+    filename: str
+    data: bytes
+    path: str | None       # 文件落盘绝对路径；文本传输为 None
+
+
+def safe_filename(name: str) -> str:
+    """剥离路径穿越与非法字符（协议 §11 安全模型）。"""
+    base = os.path.basename(name.replace("\\", "/")).strip()
+    if base in ("", ".", ".."):
+        base = "received"
+    for ch in '<>:"/\\|?*':
+        base = base.replace(ch, "_")
+    return base[:200]
+
+
+class ReceivePipeline:
+    """接收端核心：喂入图像，自动解码并累积，完成后产出结果。"""
+
+    def __init__(self, session: ReceiveSession | None = None,
+                 backend: CodecBackend | None = None, save_dir: str = "."):
+        self.session = session or ReceiveSession()
+        self.backend = backend or StandardQrBackend()
+        self.save_dir = save_dir
+        self._finalized = False
+        self.result: ReceiveResult | None = None
+
+    @property
+    def progress(self) -> float:
+        return self.session.progress
+
+    @property
+    def is_complete(self) -> bool:
+        return self.session.is_complete
+
+    def process_image(self, image) -> int:
+        """解码图像中所有 QR，有效帧（CRC 通过）入会话；返回本帧有效帧数。"""
+        added = 0
+        for raw in self.backend.decode(image):
+            try:
+                header, payload = decode_frame(raw)
+            except ProtocolError:
+                continue   # CRC 失败/坏帧：丢弃
+            self.session.ingest(header, payload)
+            added += 1
+        if self.session.is_complete and not self._finalized:
+            self._finalize()
+        return added
+
+    def _finalize(self) -> None:
+        m = self.session.manifest
+        encoded = self.session.reassemble()
+        if m.compression == Compression.NONE:
+            data = encoded
+        elif m.compression == Compression.ZLIB:
+            data = zlib.decompress(encoded)
+        else:
+            raise ValueError(f"暂不支持的压缩类型: {m.compression}")
+        if hashlib.sha256(data).digest() != m.raw_sha256:
+            raise ValueError("SHA-256 校验失败：数据损坏")
+        if m.content_type == ContentType.TEXT:
+            self.result = ReceiveResult(m.content_type, "", data, None)
+        else:
+            os.makedirs(self.save_dir, exist_ok=True)
+            path = os.path.join(self.save_dir, safe_filename(m.filename))
+            with open(path, "wb") as f:
+                f.write(data)
+            self.result = ReceiveResult(m.content_type, m.filename, data, path)
+        self._finalized = True
