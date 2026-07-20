@@ -74,12 +74,13 @@ def test_pipeline_counts_valid_frames_in_round_trip():
     data = _rand(2000, 2)
     sender = SendController(data, ContentType.FILE, "f.bin", session_id=1,
                             config=SenderConfig(chunk_size_log=6, rounds=1))
-    pipe = ReceivePipeline(backend=StandardQrBackend())
-    _drive(sender, pipe)
-    assert pipe.is_complete
-    assert pipe.valid_frames > 0
-    assert pipe.bad_frames == 0      # 合成 QR 无坏帧
-    assert pipe.drop_rate == 0.0
+    with tempfile.TemporaryDirectory() as d:
+        pipe = ReceivePipeline(backend=StandardQrBackend(), save_dir=d)
+        _drive(sender, pipe)
+        assert pipe.is_complete
+        assert pipe.valid_frames > 0
+        assert pipe.bad_frames == 0      # 合成 QR 无坏帧
+        assert pipe.drop_rate == 0.0
 
 
 def test_pipeline_drop_rate_with_bad_frames():
