@@ -1,7 +1,7 @@
 """LT 喷泉码 —— 协议 v1.0 §6。
 
-外层前向纠错：对 K 个定长源块无限生成编码符号，接收端收齐略多于 K 个不同符号
-即可整体恢复，天然适配无序、丢包、重复的单向光学信道。
+外层前向纠错：先系统发送 K 个源块，再无限生成 LT 冗余符号。接收端收齐略多于 K 个
+不同符号即可整体恢复，天然适配无序、丢包、重复的单向光学信道。
 
 确定性问题：同一 (session_id, symbol_id) 恒等映射到同一 (degree, adjacency, xor_data)。
 注意 —— degree/adjacency 在 DATA 帧中显式传输，解码端无需 PRNG，故 PRNG 跨语言
@@ -101,7 +101,8 @@ class LtEncoder:
     """对 K 个定长源块做 LT 喷泉编码。"""
 
     def __init__(self, blocks: list[bytes], session_id: int,
-                 dist: int = DIST_RSD, c: float = _RSD_C, delta: float = _RSD_DELTA):
+                 dist: int = DIST_RSD, c: float = _RSD_C, delta: float = _RSD_DELTA,
+                 max_frame_bytes: int = SAFE_FRAME_BYTES):
         self.blocks = list(blocks)
         self.K = len(self.blocks)
         if self.K <= 0:
@@ -116,14 +117,17 @@ class LtEncoder:
                      else _build_degree_cdf(self.K, dist, c, delta))
         # degree 上限：保证 DATA 帧 (header 18 + degree 2 + adjacency D×4 + xor C + crc 4) ≤ SAFE_FRAME_BYTES
         overhead = 18 + 2 + self.block_size + 4
-        if overhead >= SAFE_FRAME_BYTES:
+        if overhead >= max_frame_bytes:
             raise ValueError(
                 f"block_size={self.block_size} 过大，XOR_DATA 单独即超 QR 安全容量 "
-                f"({overhead}B ≥ {SAFE_FRAME_BYTES}B)，请减小 CHUNK_SIZE_LOG")
-        self._degree_cap = max(1, min((SAFE_FRAME_BYTES - overhead) // 4, MAX_DEGREE))
+                f"({overhead}B ≥ {max_frame_bytes}B)，请减小 CHUNK_SIZE_LOG")
+        self._degree_cap = max(1, min((max_frame_bytes - overhead) // 4, MAX_DEGREE))
 
     def encode_symbol(self, symbol_id: int) -> tuple[int, tuple[int, ...], bytes]:
         """确定性生成 symbol_id 对应的编码符号 -> (degree, adjacency, xor_data)。"""
+        if symbol_id < self.K:
+            return 1, (symbol_id,), self.blocks[symbol_id]
+
         rng = random.Random(self._seed_for(symbol_id))
         if self._cdf is None:   # DEGENERATE：均匀采样度
             degree = 1 if self.K == 1 else (1 + rng.randint(0, self.K - 1))

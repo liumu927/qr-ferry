@@ -37,6 +37,20 @@ def test_encode_is_deterministic():
     assert a[2] == b[2]   # xor_data 一致
 
 
+def test_first_k_symbols_are_systematic_blocks():
+    original = _blocks(6, 8)
+    enc = LtEncoder(original, session_id=99, dist=DIST_RSD)
+    dec = LtDecoder(6, 8)
+    for sid, block in enumerate(original):
+        degree, adj, xd = enc.encode_symbol(sid)
+        assert degree == 1
+        assert adj == (sid,)
+        assert xd == block
+        dec.add_symbol(adj, xd)
+        assert dec.resolved_count == sid + 1
+    assert dec.is_complete
+
+
 def test_symbol_fields_valid():
     K, C = 8, 16
     enc = LtEncoder(_blocks(K, C), session_id=1, dist=DIST_RSD)
@@ -110,7 +124,7 @@ def test_degree_capped_for_large_k():
     blocks = chunker.split(zlib.compress(data), 512)
     enc = LtEncoder(blocks, session_id=1, dist=DIST_RSD)
     max_degree = max_frame = 0
-    for sid in range(500):
+    for sid in range(len(blocks), len(blocks) + 500):
         d, adj, xd = enc.encode_symbol(sid)
         max_degree = max(max_degree, d)
         fb = encode_frame(FrameHeader(FrameType.DATA, 1, symbol_id=sid),

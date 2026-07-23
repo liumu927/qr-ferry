@@ -125,6 +125,8 @@ def test_receive_stats_displays_valid_and_dropped(qapp):
         "session": session, "result": None, "progress": 0.4,
         "missing_indices": [], "is_complete": False,
         "valid_frames": 50, "bad_frames": 5, "drop_rate": 5 / 55,
+        "missed_images": 12,
+        "elapsed_seconds": 10.0,
     })()
     w._recv_start_ts = 0.0
     w._update_r_stats()
@@ -132,6 +134,7 @@ def test_receive_stats_displays_valid_and_dropped(qapp):
     assert "有效 50" in text
     assert "丢弃 5" in text
     assert "9.1%" in text            # 5/55 ≈ 9.09% → :.1% = "9.1%"
+    assert "未识别 12" in text
     assert not w._r_stats.isHidden()
 
 
@@ -145,6 +148,8 @@ def test_receive_stats_shows_throughput_when_complete(qapp):
         "session": session, "result": result, "progress": 1.0,
         "missing_indices": [], "is_complete": True,
         "valid_frames": 100, "bad_frames": 0, "drop_rate": 0.0,
+        "missed_images": 0,
+        "elapsed_seconds": 2.0,
     })()
     w._recv_start_ts = 0.0
     w._update_r_stats()

@@ -4,8 +4,8 @@ import zlib
 
 import pytest
 
-from qrferry.app.send_controller import SendController, SenderConfig
-from qrferry.core.frame import ContentType, decode_frame
+from qrferry.app.send_controller import SendController, SenderConfig, recommend_chunk_size_log
+from qrferry.core.frame import Compression, ContentType, DataPayload, FrameType, decode_frame
 from qrferry.core.session import ReceiveSession
 
 
@@ -16,7 +16,7 @@ def _rand(n: int, seed: int) -> bytes:
 def test_stream_fully_received_and_reassembled():
     data = _rand(5000, 123)
     ctrl = SendController(data, ContentType.FILE, "f.bin", session_id=42,
-                         config=SenderConfig(rounds=2))
+                         config=SenderConfig(rounds=2, compression=int(Compression.ZLIB)))
     sess = ReceiveSession()
     count = 0
     for frame_bytes in ctrl:
@@ -38,7 +38,99 @@ def test_rounds_scale_stream_length():
     n1 = len(list(SendController(*common["args"], config=SenderConfig(rounds=1))))
     n3 = len(list(SendController(*common["args"], config=SenderConfig(rounds=3))))
     assert n1 < n3
-    assert n3 == 3 * n1
+    assert n3 == 3 * (n1 - 1) + 1
+
+
+def test_auto_chunk_profile_reduces_large_single_code_K():
+    data = _rand(600 * 1024, 12)
+    ctrl = SendController(data, ContentType.FILE, "large.bin", session_id=3,
+                         config=SenderConfig(rounds=1, grid=(1, 1)))
+    assert ctrl.config.chunk_size_log == 9
+    assert ctrl.K < 1300
+
+
+def test_auto_chunk_profile_caps_single_code_blocks_at_512_bytes():
+    data = _rand(1024 * 1024, 14)
+    ctrl = SendController(data, ContentType.FILE, "huge.bin", session_id=5,
+                         config=SenderConfig(rounds=1, grid=(1, 1)))
+    assert ctrl.config.chunk_size_log == 9
+    assert ctrl.K < 2100
+
+
+def test_auto_chunk_profile_raises_grid_throughput_conservatively():
+    assert recommend_chunk_size_log(600 * 1024, grid=(2, 2)) == 9
+    assert recommend_chunk_size_log(600 * 1024, grid=(3, 3)) == 8
+
+
+def test_explicit_chunk_size_overrides_auto_profile():
+    data = _rand(600 * 1024, 13)
+    ctrl = SendController(data, ContentType.FILE, "large.bin", session_id=4,
+                         config=SenderConfig(chunk_size_log=6, rounds=1))
+    assert ctrl.config.chunk_size_log == 6
+
+
+def test_auto_compression_uses_zlib_only_when_smaller():
+    compressed = SendController(b"a" * 10_000, ContentType.FILE, "a.bin", session_id=1)
+    raw = SendController(_rand(10_000, 19), ContentType.FILE, "random.bin", session_id=2)
+
+    assert compressed.config.compression == int(Compression.ZLIB)
+    assert raw.config.compression == int(Compression.NONE)
+
+
+def test_rolling_frames_send_blocks_in_order():
+    ctrl = SendController(
+        _rand(600, 20),
+        ContentType.FILE,
+        "rolling.bin",
+        session_id=3,
+        config=SenderConfig(
+            chunk_size_log=6,
+            compression=int(Compression.NONE),
+            manifest_interval=100,
+        ),
+    )
+    frames = ctrl.rolling_frames()
+    manifest_header, _ = decode_frame(next(frames))
+    assert manifest_header.frame_type == FrameType.MANIFEST
+
+    indices = []
+    for _ in range(ctrl.K + 1):
+        header, payload = decode_frame(next(frames))
+        assert header.frame_type == FrameType.DATA
+        indices.append(DataPayload.unpack(payload).adjacency[0])
+
+    assert indices == list(range(ctrl.K)) + [0]
+
+
+def test_rolling_frames_recover_a_chunk_lost_in_first_cycle():
+    data = _rand(600, 21)
+    ctrl = SendController(
+        data,
+        ContentType.FILE,
+        "rolling.bin",
+        session_id=4,
+        config=SenderConfig(
+            chunk_size_log=6,
+            compression=int(Compression.NONE),
+            manifest_interval=100,
+        ),
+    )
+    frames = ctrl.rolling_frames()
+    sess = ReceiveSession()
+    skipped = False
+    for _ in range(ctrl.K * 2 + 2):
+        header, payload = decode_frame(next(frames))
+        if header.frame_type == FrameType.DATA:
+            block_index = DataPayload.unpack(payload).adjacency[0]
+            if block_index == 3 and not skipped:
+                skipped = True
+                continue
+        sess.ingest(header, payload)
+        if sess.is_complete:
+            break
+
+    assert sess.is_complete
+    assert sess.reassemble() == data
 
 
 def test_text_payload_has_empty_filename():
@@ -76,7 +168,11 @@ def test_extra_frames_complete_lossy_transfer():
     from qrferry.core.frame import FrameType
     data = _rand(4000, 99)
     ctrl = SendController(data, ContentType.FILE, "f.bin", session_id=77,
-                         config=SenderConfig(chunk_size_log=6, rounds=1))
+                         config=SenderConfig(
+                             chunk_size_log=6,
+                             rounds=1,
+                             compression=int(Compression.ZLIB),
+                         ))
     sess = ReceiveSession()
     frames = list(ctrl)   # 消费主帧流，游标推到末尾
     for fb in frames:
@@ -119,6 +215,25 @@ def test_sender_snapshot_file_round_trip(tmp_path):
     assert ctrl2.session_id == 9
     # 重建后在同 sid 上产出确定一致的符号（续传根基）
     assert ctrl._encoder.encode_symbol(10) == ctrl2._encoder.encode_symbol(10)
+
+
+def test_sender_snapshot_preserves_manifest_interval(tmp_path):
+    path = tmp_path / "f.bin"
+    data = _rand(2000, 18)
+    path.write_bytes(data)
+    ctrl = SendController(
+        data,
+        ContentType.FILE,
+        "f.bin",
+        session_id=12,
+        config=SenderConfig(chunk_size_log=9, manifest_interval=8),
+        source_kind="file",
+        source_path=str(path),
+    )
+
+    restored = SendController.from_snapshot(ctrl.to_snapshot())
+
+    assert restored.config.manifest_interval == 8
 
 
 def test_sender_snapshot_rejects_changed_file(tmp_path):

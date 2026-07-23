@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
 import zlib
 from dataclasses import dataclass
 
@@ -49,8 +50,10 @@ class ReceivePipeline:
         self.result: ReceiveResult | None = None
         self._persist = persist
         self._ingested_since_save = 0
+        self.first_valid_frame_ts: float | None = None
         self.valid_frames = 0          # 有效帧数（CRC 通过并入会话）
         self.bad_frames = 0            # 丢弃帧数（CRC 失败/解析失败）
+        self.missed_images = 0         # 物理码未解出的图像帧数
         if persist and resume_from is not None and resume_from.to_snapshot() is not None:
             session_store.save(self.session, save_dir)   # 恢复后立即落盘，固化种子
 
@@ -69,13 +72,22 @@ class ReceivePipeline:
         return self.bad_frames / total if total else 0.0
 
     @property
+    def elapsed_seconds(self) -> float:
+        if self.first_valid_frame_ts is None:
+            return 0.0
+        return max(0.0, time.time() - self.first_valid_frame_ts)
+
+    @property
     def is_complete(self) -> bool:
         return self.session.is_complete
 
     def process_image(self, image) -> int:
         """解码图像中所有 QR，有效帧（CRC 通过）入会话；返回本帧有效帧数。"""
         added = 0
-        for raw in self.backend.decode(image):
+        decoded = self.backend.decode(image)
+        if not decoded:
+            self.missed_images += 1
+        for raw in decoded:
             try:
                 header, payload = decode_frame(raw)
             except ProtocolError:
@@ -84,6 +96,8 @@ class ReceivePipeline:
             self.session.ingest(header, payload)
             added += 1
         self.valid_frames += added
+        if added > 0 and self.first_valid_frame_ts is None:
+            self.first_valid_frame_ts = time.time()
         if self.session.is_complete and not self._finalized:
             self._finalize()
         elif self._persist and added > 0:

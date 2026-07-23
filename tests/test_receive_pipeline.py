@@ -67,6 +67,7 @@ def test_blank_image_yields_zero_and_no_crash():
     pipe = ReceivePipeline(backend=StandardQrBackend())
     blank = Image.new("L", (200, 200), 255)
     assert pipe.process_image(blank) == 0
+    assert pipe.missed_images == 1
     assert not pipe.is_complete
 
 

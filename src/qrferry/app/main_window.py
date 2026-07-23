@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import os
 import random
-import sys
 import time
 
 import cv2
@@ -21,17 +20,24 @@ from PySide6.QtWidgets import (
     QTextEdit, QVBoxLayout, QWidget)
 
 from qrferry.app.receive_pipeline import ReceivePipeline
-from qrferry.app.send_controller import SendController, SenderConfig
+from qrferry.app.camera_devices import list_camera_devices, open_camera
+from qrferry.app.send_controller import (
+    COLOR_MATRIX_CHUNK_SIZE_LOG, COLOR_MATRIX_MAX_FRAME_BYTES,
+    SendController, SenderConfig,
+)
 from qrferry.core.frame import ContentType
 from qrferry.core.session import ReceiveSession
 from qrferry.qr.backend import StandardQrBackend
+from qrferry.qr.color_matrix import ColorMatrixBackend
 
 
 def _qimage_from_pil(img: Image.Image) -> QImage:
-    if img.mode != "L":
-        img = img.convert("L")
-    w, h = img.size
-    return QImage(img.tobytes(), w, h, w, QImage.Format_Grayscale8).copy()
+    if img.mode == "L":
+        w, h = img.size
+        return QImage(img.tobytes(), w, h, w, QImage.Format_Grayscale8).copy()
+    rgb = img.convert("RGB")
+    w, h = rgb.size
+    return QImage(rgb.tobytes(), w, h, w * 3, QImage.Format_RGB888).copy()
 
 
 def _qimage_from_cv(frame: np.ndarray) -> QImage:
@@ -168,7 +174,8 @@ _SENDER_STATE_DIR = os.path.expanduser("~/.qrferry")
 
 
 class MainWindow(QMainWindow):
-    GRID_OPTIONS = [("1×1", (1, 1)), ("2×2", (2, 2))]
+    GRID_OPTIONS = [("1×1", (1, 1)), ("2×2", (2, 2)), ("3×3", (3, 3))]
+    CODEC_OPTIONS = [("标准QR（推荐）", "qr"), ("彩色码（实验）", "color")]
 
     def __init__(self):
         super().__init__()
@@ -323,6 +330,7 @@ class MainWindow(QMainWindow):
 
         for label, attr, items, cur in (
             ("帧率(FPS)", "_s_fps", None, 8),
+            ("码制", "_s_codec", [n for n, _ in self.CODEC_OPTIONS], None),
             ("纠错级", "_s_ecc", ["L", "M", "Q", "H"], None),
             ("网格", "_s_grid", [n for n, _ in self.GRID_OPTIONS], None),
         ):
@@ -332,10 +340,12 @@ class MainWindow(QMainWindow):
                 w = QSpinBox(); w.setRange(1, 30); w.setValue(cur)
             else:
                 w = QComboBox(); w.addItems(items)
-                if attr == "_s_ecc": w.setCurrentText("Q")
+                if attr == "_s_ecc": w.setCurrentText("M")
             setattr(self, attr, w)
             row.addWidget(w)
             left.addLayout(row)
+        self._s_codec.currentIndexChanged.connect(self._sync_send_codec_controls)
+        self._sync_send_codec_controls()
 
         # 人工补发：会话存活时可追加 N 个新符号（LT 喷泉码靠新 symbol_id 补缺块，非重发旧帧）
         extra_row = QHBoxLayout()
@@ -376,8 +386,9 @@ class MainWindow(QMainWindow):
         lay = QVBoxLayout(tab)
         top = QHBoxLayout()
         left = QVBoxLayout()
-        left.addWidget(QLabel("摄像头索引"))
-        self._r_cam = QSpinBox(); self._r_cam.setRange(0, 9); self._r_cam.setValue(0)
+        left.addWidget(QLabel("摄像头设备"))
+        self._r_cam = QComboBox()
+        self._refresh_camera_devices()
         left.addWidget(self._r_cam)
         # 目录显示（左，溢出省略）+ 选择按钮（右），同行
         dir_row = QHBoxLayout()
@@ -393,6 +404,9 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout(); row.addWidget(QLabel("采集FPS"))
         self._r_fps = QSpinBox(); self._r_fps.setRange(1, 30); self._r_fps.setValue(10)
         row.addWidget(self._r_fps); left.addLayout(row)
+        codec_row = QHBoxLayout(); codec_row.addWidget(QLabel("码制"))
+        self._r_codec = QComboBox(); self._r_codec.addItems([n for n, _ in self.CODEC_OPTIONS])
+        codec_row.addWidget(self._r_codec); left.addLayout(codec_row)
         self._r_start = QPushButton("开始接收")
         self._r_start.setCheckable(True)
         self._r_start.toggled.connect(self._toggle_recv)
@@ -477,9 +491,9 @@ class MainWindow(QMainWindow):
             self._r_stats.hide()
             self._r_stats.setText("")
             return
-        elapsed = max(1e-6, time.time() - getattr(self, "_recv_start_ts", time.time()))
+        elapsed = max(1e-6, pipe.elapsed_seconds or 0.0)
         text = (f"有效 {pipe.valid_frames} · 丢弃 {pipe.bad_frames} "
-                f"({pipe.drop_rate:.1%}) · 已用 {elapsed:.1f}s")
+                f"({pipe.drop_rate:.1%}) · 未识别 {pipe.missed_images} · 已用 {elapsed:.1f}s")
         if pipe.is_complete and pipe.result is not None:
             throughput = len(pipe.result.data) / elapsed / 1024.0
             text += f" · {throughput:.1f} KB/s"
@@ -511,6 +525,16 @@ class MainWindow(QMainWindow):
         return super().eventFilter(obj, event)
 
     # ────────────── 发送 ──────────────
+    def _selected_backend(self, combo: QComboBox) -> StandardQrBackend | ColorMatrixBackend:
+        _, code = self.CODEC_OPTIONS[combo.currentIndex()]
+        return ColorMatrixBackend() if code == "color" else StandardQrBackend()
+
+    def _sync_send_codec_controls(self) -> None:
+        is_color = self._s_codec.currentIndex() == 1
+        self._s_grid.setEnabled(not is_color)
+        if is_color and self._s_grid.currentIndex() != 0:
+            self._s_grid.setCurrentIndex(0)
+
     def _on_send_mode(self):
         is_file = self._s_file.isChecked()
         self._s_pick.setVisible(is_file)
@@ -544,7 +568,12 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "恢复发送", "没有可恢复的发送会话")
             return
         self._send_ctrl = ctrl
-        self._send_iter = iter(ctrl)   # __iter__ 基于 _next_sid 推进，自动从断点产出新符号
+        self._backend = self._selected_backend(self._s_codec)
+        self._send_iter = (
+            ctrl.infinite_frames()
+            if isinstance(self._backend, ColorMatrixBackend)
+            else ctrl.rolling_frames()
+        )
         self._s_start.setText("停止发送")
         self._s_start.setChecked(True)
         self._send_timer.start(int(1000 / self._s_fps.value()))
@@ -570,10 +599,15 @@ class MainWindow(QMainWindow):
             data = text.encode("utf-8")
             filename = ""
             ct = ContentType.TEXT
+        self._backend = self._selected_backend(self._s_codec)
+        is_color = isinstance(self._backend, ColorMatrixBackend)
         cfg = SenderConfig(
+            chunk_size_log=COLOR_MATRIX_CHUNK_SIZE_LOG if is_color else None,
             ecc_level=self._s_ecc.currentText(),
-            grid=self.GRID_OPTIONS[self._s_grid.currentIndex()][1],
+            grid=(1, 1) if is_color else self.GRID_OPTIONS[self._s_grid.currentIndex()][1],
             rounds=3,
+            max_frame_bytes=COLOR_MATRIX_MAX_FRAME_BYTES if is_color else SenderConfig().max_frame_bytes,
+            manifest_interval=8 if is_color else 32,
         )
         sid = random.randint(1, 0xFFFFFFFF)
         is_file = (ct == ContentType.FILE)
@@ -581,10 +615,14 @@ class MainWindow(QMainWindow):
             data, ct, filename, sid, cfg,
             source_kind="file" if is_file else "text",
             source_path=self._file_path if is_file else None)
-        self._send_iter = iter(self._send_ctrl)
+        self._send_iter = (
+            self._send_ctrl.infinite_frames()
+            if is_color else self._send_ctrl.rolling_frames()
+        )
         self._s_start.setText("停止发送")
         self._send_timer.start(int(1000 / self._s_fps.value()))
-        self.statusBar().showMessage(f"发送中：K={self._send_ctrl.K}，{cfg.rounds} 轮")
+        mode_desc = "持续流"
+        self.statusBar().showMessage(f"发送中：K={self._send_ctrl.K}，{mode_desc}")
         # 持久化发送端快照，支持断点续传（失败不阻断发送）
         from qrferry.app import session_store
         try:
@@ -633,7 +671,8 @@ class MainWindow(QMainWindow):
             imgs = [self._backend.encode(f, ecc_level=ecc, box_size=6, border=2) for f in frames]
             img = self._compose_grid(imgs)
         pix = QPixmap.fromImage(_qimage_from_pil(img))
-        self._qr_label.setPixmap(pix.scaled(self._qr_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        transform = Qt.FastTransformation if isinstance(self._backend, ColorMatrixBackend) else Qt.SmoothTransformation
+        self._qr_label.setPixmap(pix.scaled(self._qr_label.size(), Qt.KeepAspectRatio, transform))
 
     def _compose_grid(self, imgs):
         rows, cols = self._send_ctrl.config.grid
@@ -651,6 +690,13 @@ class MainWindow(QMainWindow):
         if d:
             self._r_dir.setFullText(d)
             self._r_dir.setToolTip(d)
+
+    def _refresh_camera_devices(self):
+        self._r_cam.clear()
+        for device in list_camera_devices(max_index=9, probe=False):
+            self._r_cam.addItem(device.label, device.index)
+        if self._r_cam.count() == 0:
+            self._r_cam.addItem("0 · Camera 0 (未打开)", 0)
 
     def _toggle_recv(self, checked: bool):
         if checked:
@@ -678,11 +724,8 @@ class MainWindow(QMainWindow):
         return None
 
     def _start_recv(self):
-        idx = self._r_cam.value()
-        if sys.platform == "win32":
-            self._cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
-        else:
-            self._cap = cv2.VideoCapture(idx)
+        idx = int(self._r_cam.currentData() or 0)
+        self._cap = open_camera(idx)
         if not self._cap.isOpened():
             QMessageBox.warning(self, "错误", f"无法打开摄像头 {idx}")
             self._cap = None
@@ -698,8 +741,9 @@ class MainWindow(QMainWindow):
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         resumed = self._probe_resume()
-        self._pipe = ReceivePipeline(save_dir=self._r_dir.fullText(), resume_from=resumed)
-        self._recv_start_ts = time.time()
+        recv_backend = self._selected_backend(self._r_codec)
+        self._pipe = ReceivePipeline(
+            save_dir=self._r_dir.fullText(), resume_from=resumed, backend=recv_backend)
         self._r_progress.setValue(0)
         self._r_result.clear()
         self._update_r_count()
@@ -726,9 +770,12 @@ class MainWindow(QMainWindow):
             return
         pix = QPixmap.fromImage(_qimage_from_cv(frame))
         self._cam_label.setPixmap(pix.scaled(self._cam_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if isinstance(self._pipe.backend, ColorMatrixBackend):
+            image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        else:
+            image = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         try:
-            self._pipe.process_image(gray)
+            self._pipe.process_image(image)
         except ValueError as e:
             self._stop_recv()
             QMessageBox.warning(self, "错误", str(e))
