@@ -33,3 +33,16 @@ output/
 .omc/
 .agents/
 .claude/
+
+# Android（android/ 子工程构建产物）
+**/build/
+local.properties
+.gradle/
+*.iml
+.cxx/
+captures/
+*.apk
+*.aab
+*.ap_
+*.dex
+.qrferry/
