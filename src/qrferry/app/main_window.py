@@ -160,6 +160,9 @@ QScrollBar::add-page, QScrollBar::sub-page {{ background: none; height: 0; width
 QProgressBar {{ background: {track}; border: none; border-radius: 8px; height: 14px;
     text-align: center; color: {sub}; font-size: 11px; font-weight: 700; }}
 QProgressBar::chunk {{ background: {accent}; border-radius: 8px; }}
+QMessageBox {{ background: {card}; color: {fg}; }}
+QMessageBox QLabel {{ color: {fg}; background: transparent; }}
+QMessageBox QPushButton {{ min-width: 72px; }}
 QFrame#card {{ background: {card}; border: 1px solid {border}; border-radius: 16px; }}
 QFrame#segmented {{ background: {track}; border-radius: 12px; }}
 QPushButton#seg {{ background: transparent; color: {sub}; border: none;

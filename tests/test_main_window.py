@@ -8,7 +8,7 @@ import pytest
 pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication
 
-from qrferry.app.main_window import MainWindow
+from qrferry.app.main_window import MainWindow, _build_style
 
 
 @pytest.fixture(scope="module")
@@ -23,6 +23,17 @@ def test_window_constructs(qapp):
     assert w._qr_label is not None
     assert w._cam_label is not None
     assert w._r_progress.value() == 0
+
+
+@pytest.mark.parametrize(
+    ("dark", "background", "foreground"),
+    [(False, "#FFFFFF", "#0F172A"), (True, "#1E293B", "#E2E8F0")],
+)
+def test_message_box_text_contrasts_with_background(dark, background, foreground):
+    """提示弹窗应显式使用当前主题的高对比度背景和文字色。"""
+    style = _build_style(dark)
+    assert f"QMessageBox {{ background: {background}; color: {foreground}; }}" in style
+    assert f"QMessageBox QLabel {{ color: {foreground}; background: transparent; }}" in style
 
 
 def test_send_mode_switch(qapp):
