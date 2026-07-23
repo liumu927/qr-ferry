@@ -1,0 +1,15 @@
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="status_bg">#EE111111</color>
+    <color name="ok">#FF2E7D32</color>
+    <color name="err">#FFC62828</color>
+    <color name="app_bg">#FFF8FAFC</color>
+    <color name="surface">#FFFFFFFF</color>
+    <color name="surface_muted">#FFE2E8F0</color>
+    <color name="ink">#FF0F172A</color>
+    <color name="muted">#FF64748B</color>
+    <color name="line">#FFE2E8F0</color>
+    <color name="accent">#FF2563EB</color>
+    <color name="accent_soft">#FFEFF6FF</color>
+</resources>
