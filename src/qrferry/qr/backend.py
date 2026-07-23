@@ -6,12 +6,6 @@ CodecBackend 抽象接口；StandardQrBackend 用 qrcode + Pillow 编码、zxing
 """
 from __future__ import annotations
 
-import segno
-import zxingcpp
-import numpy as np
-from io import BytesIO
-from PIL import Image
-
 __all__ = ["CodecBackend", "StandardQrBackend"]
 
 
@@ -33,6 +27,10 @@ class StandardQrBackend(CodecBackend):
 
     def encode(self, data: bytes, ecc_level: str = "Q",
                box_size: int = 10, border: int = 4) -> Image.Image:
+        import segno
+        from io import BytesIO
+        from PIL import Image
+
         qr = segno.make(data, error=self._ECC[ecc_level], mode="byte")
         buf = BytesIO()
         qr.save(buf, kind="png", scale=box_size, border=border)
@@ -40,6 +38,10 @@ class StandardQrBackend(CodecBackend):
         return Image.open(buf).convert("L")
 
     def decode(self, image) -> list[bytes]:
+        import numpy as np
+        from PIL import Image
+        import zxingcpp
+
         if isinstance(image, Image.Image):
             image = np.array(image)
         # try_rotate/try_invert/try_downscale 默认已开启；显式用 LocalAverage 二值化，
