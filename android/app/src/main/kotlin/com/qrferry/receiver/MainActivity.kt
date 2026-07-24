@@ -1,13 +1,14 @@
 package com.qrferry.receiver
 
 import android.Manifest
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
-import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
@@ -17,6 +18,7 @@ import android.util.Log
 import android.util.Size
 import android.view.View
 import android.view.WindowManager
+import android.webkit.MimeTypeMap
 import android.graphics.drawable.BitmapDrawable
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
@@ -39,7 +41,6 @@ import com.qrferry.receiver.pipeline.ReceivePipeline
 import com.qrferry.receiver.send.ColorMatrixRenderer
 import com.qrferry.receiver.send.QrRenderer
 import com.qrferry.receiver.send.TextSendController
-import java.io.File
 import kotlin.random.Random
 import java.util.concurrent.Executors
 
@@ -69,6 +70,7 @@ class MainActivity : AppCompatActivity() {
 
     private var completed = false
     private var paused = false
+    private var pendingReceivedFile: ReceivePipeline.Result.File? = null
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -80,6 +82,24 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) loadSelectedFile(uri)
+    }
+
+    private val saveFileLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { activityResult ->
+        if (activityResult.resultCode != Activity.RESULT_OK) return@registerForActivityResult
+        val uri = activityResult.data?.data ?: return@registerForActivityResult
+        val file = pendingReceivedFile ?: return@registerForActivityResult
+        try {
+            contentResolver.openOutputStream(uri, "w")?.use { it.write(file.bytes) }
+                ?: error("无法打开保存位置")
+            val savedName = queryDisplayName(uri) ?: file.filename
+            binding.resultText.setText("文件已保存：$savedName")
+            setStatus("文件已保存：$savedName")
+            Toast.makeText(this, "已保存 $savedName", Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "文件保存失败: ${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -94,6 +114,7 @@ class MainActivity : AppCompatActivity() {
         binding.btnModeSend.setOnClickListener { showSendMode(true) }
         binding.btnModeReceive.setOnClickListener { showSendMode(false) }
         binding.btnCopyResult.setOnClickListener { copyResult() }
+        binding.btnSaveResult.setOnClickListener { saveReceivedFile() }
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
@@ -358,7 +379,10 @@ class MainActivity : AppCompatActivity() {
     private fun reset() {
         pipeline = ReceivePipeline()
         completed = false
+        pendingReceivedFile = null
         binding.resultText.setText("")
+        binding.btnCopyResult.visibility = View.GONE
+        binding.btnSaveResult.visibility = View.GONE
         if (!paused) analysis.setAnalyzer(analysisExecutor, ::analyzeImage)
         setStatus("已重置。对准 QR 码…")
         Toast.makeText(this, "已重置", Toast.LENGTH_SHORT).show()
@@ -430,22 +454,37 @@ class MainActivity : AppCompatActivity() {
         sb.append(result.shaHex).append("\n\n")
         when (result) {
             is ReceivePipeline.Result.Text -> {
+                pendingReceivedFile = null
                 sb.append("[TEXT]\n").append(result.text)
                 binding.resultText.setText(result.text)
+                binding.btnCopyResult.visibility = View.VISIBLE
+                binding.btnSaveResult.visibility = View.GONE
                 setStatus(sb.toString())
             }
             is ReceivePipeline.Result.File -> {
-                val dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: filesDir
-                dir.mkdirs()
-                val file = File(dir, result.filename)
-                file.writeBytes(result.bytes)
+                pendingReceivedFile = result
                 sb.append("[FILE] ${result.filename} (${result.bytes.size} B)\n")
-                sb.append("已保存:\n${file.absolutePath}")
-                binding.resultText.setText(file.absolutePath)
+                sb.append("等待用户选择保存位置")
+                binding.resultText.setText("文件接收完成：${result.filename}\n大小：${formatBytes(result.bytes.size.toLong())}")
+                binding.btnCopyResult.visibility = View.GONE
+                binding.btnSaveResult.visibility = View.VISIBLE
                 setStatus(sb.toString())
-                Toast.makeText(this, "已保存 ${result.filename}", Toast.LENGTH_LONG).show()
             }
         }
+    }
+
+    private fun saveReceivedFile() {
+        val file = pendingReceivedFile ?: return
+        val extension = file.filename.substringAfterLast('.', "").lowercase()
+        val mimeType = extension.takeIf { it.isNotBlank() }
+            ?.let { MimeTypeMap.getSingleton().getMimeTypeFromExtension(it) }
+            ?: "application/octet-stream"
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = mimeType
+            putExtra(Intent.EXTRA_TITLE, file.filename)
+        }
+        saveFileLauncher.launch(intent)
     }
 
     private fun setStatus(text: String) {

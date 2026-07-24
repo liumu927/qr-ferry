@@ -8,7 +8,8 @@ import pytest
 pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication
 
-from qrferry.app.main_window import MainWindow, _build_style
+from qrferry.app.main_window import MainWindow, _RECEIVE_POLL_INTERVAL_MS, _build_style
+from qrferry.core.frame import ContentType
 
 
 @pytest.fixture(scope="module")
@@ -23,6 +24,33 @@ def test_window_constructs(qapp):
     assert w._qr_label is not None
     assert w._cam_label is not None
     assert w._r_progress.value() == 0
+    assert not hasattr(w, "_r_fps")
+    assert not hasattr(w, "_r_dir")
+    assert not hasattr(w, "_r_pick")
+    assert w._r_save.isHidden()
+
+
+def test_receive_uses_internal_poll_rate(qapp, monkeypatch):
+    """接收端使用内部采集上限，不依赖用户输入。"""
+    import qrferry.app.main_window as main_window
+
+    class FakeCamera:
+        def isOpened(self):
+            return True
+
+        def set(self, *_args):
+            return True
+
+        def release(self):
+            pass
+
+    w = MainWindow()
+    monkeypatch.setattr(main_window, "open_camera", lambda _index: FakeCamera())
+    monkeypatch.setattr(w, "_probe_resume", lambda: None)
+
+    w._start_recv()
+    assert w._recv_timer.interval() == _RECEIVE_POLL_INTERVAL_MS
+    w._stop_recv()
 
 
 @pytest.mark.parametrize(
@@ -67,7 +95,10 @@ def test_receive_count_during_transfer_shows_block_progress(qapp):
 def test_receive_count_text_complete_uses_chars_not_bytes(qapp):
     """文本接收完成：角标显示字符数（与发送端口径一致），不得用 UTF-8 字节数。"""
     w = MainWindow()
-    result = type("R", (), {"path": None, "data": "你好ABC".encode("utf-8")})()
+    result = type("R", (), {
+        "content_type": ContentType.TEXT,
+        "data": "你好ABC".encode("utf-8"),
+    })()
     session = type("S", (), {"manifest": None})()
     w._pipe = type("P", (), {"session": session, "result": result})
     w._r_result.setPlainText("你好ABC")   # 5 字符 / UTF-8 9 字节
@@ -154,7 +185,7 @@ def test_receive_stats_shows_throughput_when_complete(qapp):
     w = MainWindow()
     manifest = type("M", (), {"raw_size": 2048})()
     session = type("S", (), {"manifest": manifest})()
-    result = type("R", (), {"data": b"x" * 2048, "path": "/tmp/f"})()
+    result = type("R", (), {"data": b"x" * 2048, "content_type": ContentType.FILE})()
     w._pipe = type("P", (), {
         "session": session, "result": result, "progress": 1.0,
         "missing_indices": [], "is_complete": True,
@@ -167,3 +198,50 @@ def test_receive_stats_shows_throughput_when_complete(qapp):
     text = w._r_stats.text()
     assert "有效 100" in text
     assert "KB/s" in text            # 完成时显示吞吐量
+
+
+def test_received_file_waits_for_user_save(qapp):
+    """文件完成后仅展示保存动作，不提前写入或声称已保存。"""
+    w = MainWindow()
+    result = type("R", (), {
+        "content_type": ContentType.FILE,
+        "filename": "报告.pdf",
+        "data": b"pdf-data",
+    })()
+    session = type("S", (), {"manifest": None})()
+    w._pipe = type("P", (), {"result": result, "session": session})()
+
+    w._on_received()
+
+    assert not w._r_save.isHidden()
+    assert w._r_copy.isHidden()
+    assert "文件接收完成：报告.pdf" in w._r_result.toPlainText()
+    assert "已保存" not in w._r_result.toPlainText()
+
+
+def test_save_received_file_uses_sender_name_and_extension(qapp, monkeypatch, tmp_path):
+    """保存弹窗默认沿用发送端文件名和类型，并允许用户自定义路径。"""
+    from PySide6.QtWidgets import QFileDialog
+
+    w = MainWindow()
+    result = type("R", (), {
+        "content_type": ContentType.FILE,
+        "filename": "报告.pdf",
+        "data": b"pdf-data",
+    })()
+    w._pipe = type("P", (), {"result": result})()
+    captured = {}
+
+    def choose_path(_parent, _title, default_path, file_filter):
+        captured["default_path"] = default_path
+        captured["file_filter"] = file_filter
+        return str(tmp_path / "自定义报告"), "PDF 文件 (*.pdf)"
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", choose_path)
+    w._save_received_file()
+
+    saved = tmp_path / "自定义报告.pdf"
+    assert saved.read_bytes() == b"pdf-data"
+    assert os.path.basename(captured["default_path"]) == "报告.pdf"
+    assert captured["file_filter"].startswith("PDF 文件 (*.pdf)")
+    assert str(saved) in w._r_result.toPlainText()

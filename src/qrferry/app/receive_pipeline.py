@@ -1,7 +1,8 @@
-"""接收流水线 —— 图像 → 解码 → 会话 → 落盘 的纯逻辑层。
+"""接收流水线 —— 图像 → 解码 → 会话 → 校验 的纯逻辑层。
 
 与 Qt/摄像头解耦：上层（UI/控制器）负责采集帧图像传入，本模块负责
-解码多码 → CRC 校验 → 驱动 ReceiveSession → 完成后解压 + SHA-256 校验 + 落盘/文本。
+解码多码 → CRC 校验 → 驱动 ReceiveSession → 完成后解压 + SHA-256 校验，
+文件数据由上层在用户确认保存后落盘。
 """
 from __future__ import annotations
 
@@ -24,7 +25,6 @@ class ReceiveResult:
     content_type: int
     filename: str
     data: bytes
-    path: str | None       # 文件落盘绝对路径；文本传输为 None
 
 
 def safe_filename(name: str) -> str:
@@ -122,14 +122,11 @@ class ReceivePipeline:
             raise ValueError(f"暂不支持的压缩类型: {m.compression}")
         if hashlib.sha256(data).digest() != m.raw_sha256:
             raise ValueError("SHA-256 校验失败：数据损坏")
-        if m.content_type == ContentType.TEXT:
-            self.result = ReceiveResult(m.content_type, "", data, None)
-        else:
-            os.makedirs(self.save_dir, exist_ok=True)
-            path = os.path.join(self.save_dir, safe_filename(m.filename))
-            with open(path, "wb") as f:
-                f.write(data)
-            self.result = ReceiveResult(m.content_type, m.filename, data, path)
+        self.result = ReceiveResult(
+            m.content_type,
+            m.filename if m.content_type == ContentType.FILE else "",
+            data,
+        )
         self._finalized = True
         if self._persist:
             session_store.clear(self.save_dir)   # 传输完成，清理续传快照

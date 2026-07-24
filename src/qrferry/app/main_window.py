@@ -12,14 +12,14 @@ import time
 import cv2
 import numpy as np
 from PIL import Image
-from PySide6.QtCore import Qt, QPointF, QRect, QTimer
+from PySide6.QtCore import Qt, QPointF, QRect, QStandardPaths, QTimer
 from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QButtonGroup, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel,
     QMainWindow, QMessageBox, QProgressBar, QPushButton, QSpinBox, QTabWidget,
     QTextEdit, QVBoxLayout, QWidget)
 
-from qrferry.app.receive_pipeline import ReceivePipeline
+from qrferry.app.receive_pipeline import ReceivePipeline, safe_filename
 from qrferry.app.camera_devices import list_camera_devices, open_camera
 from qrferry.app.send_controller import (
     COLOR_MATRIX_CHUNK_SIZE_LOG, COLOR_MATRIX_MAX_FRAME_BYTES,
@@ -172,8 +172,12 @@ QPushButton#seg:checked {{ background: {card}; color: {accent}; }}
 """
 
 
-# 发送端断点续传快照目录（接收端用用户选的 save_dir；发送端无对应目录，用用户主目录下的固定位置）
+# 断点续传快照使用应用内部目录，不与用户最终选择的文件保存路径耦合。
 _SENDER_STATE_DIR = os.path.expanduser("~/.qrferry")
+_RECEIVER_STATE_ROOT = os.path.expanduser("~")
+
+# 接收轮询以 30 FPS 为上限；解码占用主线程时，QTimer 会自然按处理能力降速。
+_RECEIVE_POLL_INTERVAL_MS = 34
 
 
 class MainWindow(QMainWindow):
@@ -393,20 +397,6 @@ class MainWindow(QMainWindow):
         self._r_cam = QComboBox()
         self._refresh_camera_devices()
         left.addWidget(self._r_cam)
-        # 目录显示（左，溢出省略）+ 选择按钮（右），同行
-        dir_row = QHBoxLayout()
-        self._r_dir = ElideLabel("./", Qt.ElideMiddle)
-        self._r_dir.setStyleSheet("color:#64748B;")
-        self._r_dir.setToolTip("./")
-        dir_row.addWidget(self._r_dir, 1)
-        self._r_pick = QPushButton("选择")
-        self._r_pick.clicked.connect(self._pick_save_dir)
-        self._r_pick.setFixedWidth(100)
-        dir_row.addWidget(self._r_pick)
-        left.addLayout(dir_row)
-        row = QHBoxLayout(); row.addWidget(QLabel("采集FPS"))
-        self._r_fps = QSpinBox(); self._r_fps.setRange(1, 30); self._r_fps.setValue(10)
-        row.addWidget(self._r_fps); left.addLayout(row)
         codec_row = QHBoxLayout(); codec_row.addWidget(QLabel("码制"))
         self._r_codec = QComboBox(); self._r_codec.addItems([n for n, _ in self.CODEC_OPTIONS])
         codec_row.addWidget(self._r_codec); left.addLayout(codec_row)
@@ -442,7 +432,7 @@ class MainWindow(QMainWindow):
         self._r_stats.hide()
         lay.addWidget(self._r_stats)
         self._r_result = QTextEdit(); self._r_result.setReadOnly(True)
-        self._r_result.setPlaceholderText("接收完成后，文本显示于此（可复制）；文件显示保存路径。")
+        self._r_result.setPlaceholderText("接收完成后，文本可复制；文件可选择路径另存。")
         self._r_result.setMaximumHeight(120)
         lay.addWidget(self._r_result)
         # 字符统计角标（框内右下角）：当前字符数 / 应接收字符数
@@ -451,7 +441,11 @@ class MainWindow(QMainWindow):
         self._r_result.viewport().installEventFilter(self)
         copy_row = QHBoxLayout(); copy_row.addStretch(1)
         self._r_copy = QPushButton("复制文本"); self._r_copy.clicked.connect(self._copy_result)
+        self._r_copy.hide()
         copy_row.addWidget(self._r_copy)
+        self._r_save = QPushButton("保存文件"); self._r_save.clicked.connect(self._save_received_file)
+        self._r_save.hide()
+        copy_row.addWidget(self._r_save)
         lay.addLayout(copy_row)
         return tab
 
@@ -472,7 +466,8 @@ class MainWindow(QMainWindow):
         if pipe is not None and pipe.result is not None:
             # 已完成：文本按字符数（与发送端口径一致），文件按字节数
             r = pipe.result
-            label = f"{len(self._r_result.toPlainText())} 字符" if r.path is None else f"{len(r.data)} 字节"
+            label = (f"{len(self._r_result.toPlainText())} 字符"
+                     if r.content_type == ContentType.TEXT else f"{len(r.data)} 字节")
         elif pipe is not None and pipe.session.manifest is not None:
             # 传输中：文本整包解码后才产生字符数，过程中只能给块恢复进度
             m = pipe.session.manifest
@@ -688,12 +683,6 @@ class MainWindow(QMainWindow):
         return canvas
 
     # ────────────── 接收 ──────────────
-    def _pick_save_dir(self):
-        d = QFileDialog.getExistingDirectory(self, "选择保存目录", self._r_dir.fullText())
-        if d:
-            self._r_dir.setFullText(d)
-            self._r_dir.setToolTip(d)
-
     def _refresh_camera_devices(self):
         self._r_cam.clear()
         for device in list_camera_devices(max_index=9, probe=False):
@@ -708,9 +697,9 @@ class MainWindow(QMainWindow):
             self._stop_recv()
 
     def _probe_resume(self) -> ReceiveSession | None:
-        """探测保存目录下是否有未完成会话；有则询问用户是否恢复，否则返回 None。"""
+        """探测内部状态目录下的未完成会话；有则询问用户是否恢复。"""
         from qrferry.app import session_store
-        sess = session_store.load(self._r_dir.fullText())
+        sess = session_store.load(_RECEIVER_STATE_ROOT)
         if sess is None or sess.is_complete:
             return None
         missing = len(sess.missing_indices)
@@ -723,7 +712,7 @@ class MainWindow(QMainWindow):
             self, "断点续传", msg, QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
         if choice == QMessageBox.Yes:
             return sess
-        session_store.clear(self._r_dir.fullText())
+        session_store.clear(_RECEIVER_STATE_ROOT)
         return None
 
     def _start_recv(self):
@@ -746,14 +735,16 @@ class MainWindow(QMainWindow):
         resumed = self._probe_resume()
         recv_backend = self._selected_backend(self._r_codec)
         self._pipe = ReceivePipeline(
-            save_dir=self._r_dir.fullText(), resume_from=resumed, backend=recv_backend)
+            save_dir=_RECEIVER_STATE_ROOT, resume_from=resumed, backend=recv_backend)
         self._r_progress.setValue(0)
         self._r_result.clear()
+        self._r_copy.hide()
+        self._r_save.hide()
         self._update_r_count()
         self._update_r_missing()
         self._update_r_stats()
         self._r_start.setText("停止接收")
-        self._recv_timer.start(int(1000 / self._r_fps.value()))
+        self._recv_timer.start(_RECEIVE_POLL_INTERVAL_MS)
         self.statusBar().showMessage("接收中…")
 
     def _stop_recv(self):
@@ -794,14 +785,49 @@ class MainWindow(QMainWindow):
 
     def _on_received(self):
         r = self._pipe.result
-        if r.path is None:
+        if r.content_type == ContentType.TEXT:
             self._r_result.setPlainText(r.data.decode("utf-8", errors="replace"))
+            self._r_copy.show()
+            self._r_save.hide()
             self.statusBar().showMessage("文本接收完成")
         else:
-            self._r_result.setPlainText(f"文件已保存：{r.path}")
-            self.statusBar().showMessage(f"文件接收完成：{r.path}")
+            filename = safe_filename(r.filename)
+            self._r_result.setPlainText(f"文件接收完成：{filename}\n大小：{len(r.data)} 字节")
+            self._r_copy.hide()
+            self._r_save.show()
+            self.statusBar().showMessage(f"文件接收完成，等待保存：{filename}")
         self._update_r_count()
         self._update_r_stats()
+
+    def _save_received_file(self):
+        if self._pipe is None or self._pipe.result is None:
+            return
+        r = self._pipe.result
+        if r.content_type != ContentType.FILE:
+            return
+
+        filename = safe_filename(r.filename)
+        default_dir = QStandardPaths.writableLocation(QStandardPaths.DownloadLocation)
+        if not default_dir or not os.path.isdir(default_dir):
+            default_dir = os.path.expanduser("~")
+        default_path = os.path.join(default_dir, filename)
+        extension = os.path.splitext(filename)[1]
+        file_filter = (f"{extension[1:].upper()} 文件 (*{extension});;所有文件 (*)"
+                       if extension else "所有文件 (*)")
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self, "保存接收文件", default_path, file_filter)
+        if not path:
+            return
+        if extension and not os.path.splitext(path)[1] and selected_filter != "所有文件 (*)":
+            path += extension
+        try:
+            with open(path, "wb") as f:
+                f.write(r.data)
+        except OSError as e:
+            QMessageBox.warning(self, "保存失败", str(e))
+            return
+        self._r_result.setPlainText(f"文件已保存：{path}")
+        self.statusBar().showMessage(f"文件已保存：{path}")
 
     def _copy_result(self):
         from PySide6.QtWidgets import QApplication

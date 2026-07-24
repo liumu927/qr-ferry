@@ -1,4 +1,5 @@
 """接收流水线单元测试 —— 用合成 QR 图验证全闭环（不经摄像头）。"""
+import os
 import random
 import tempfile
 from PIL import Image
@@ -22,7 +23,7 @@ def _drive(sender: SendController, pipe: ReceivePipeline) -> None:
             break
 
 
-def test_pipeline_file_round_trip():
+def test_pipeline_file_result_stays_in_memory_until_saved():
     data = _rand(3000, 7)
     sender = SendController(data, ContentType.FILE, "报告.pdf", session_id=42,
                             config=SenderConfig(chunk_size_log=6, rounds=2))
@@ -30,9 +31,9 @@ def test_pipeline_file_round_trip():
         pipe = ReceivePipeline(backend=StandardQrBackend(), save_dir=d)
         _drive(sender, pipe)
         assert pipe.is_complete and pipe.result is not None
-        assert pipe.result.path is not None
-        with open(pipe.result.path, "rb") as f:
-            assert f.read() == data
+        assert pipe.result.filename == "报告.pdf"
+        assert pipe.result.data == data
+        assert not os.path.exists(os.path.join(d, "报告.pdf"))
 
 
 def test_pipeline_text_no_file_written():
@@ -43,7 +44,6 @@ def test_pipeline_text_no_file_written():
     _drive(sender, pipe)
     assert pipe.result is not None
     assert pipe.result.data == text
-    assert pipe.result.path is None
 
 
 def test_pipeline_supports_uncompressed_payload():
