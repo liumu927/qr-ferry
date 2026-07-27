@@ -13,6 +13,21 @@ val keystoreProperties = Properties().apply {
     rootProject.file("keystore.properties").takeIf { it.exists() }?.let { load(FileInputStream(it)) }
 }
 
+// 版本号与 git tag 联动：优先 -PversionName 或 QR_FERRY_VERSION 环境变量，否则 fallback 默认值。
+// CI 在 tag 推送时注入 tag 名（去 v 前缀）；本地无注入时用默认值，assembleDebug 不受影响。
+fun deriveVersionCode(name: String): Int {
+    val parts = name.split(".").map { it.toIntOrNull() ?: 0 }
+    val major = parts.getOrElse(0) { 0 }
+    val minor = parts.getOrElse(1) { 0 }
+    val patch = parts.getOrElse(2) { 0 }
+    return major * 10000 + minor * 100 + patch
+}
+
+val releaseVersionName: String = (project.findProperty("versionName") as String?)
+    ?: System.getenv("QR_FERRY_VERSION")?.takeIf { it.isNotBlank() }
+    ?: "0.1.10"
+val releaseVersionCode: Int = deriveVersionCode(releaseVersionName)
+
 android {
     namespace = "com.qrferry.receiver"
     compileSdk = 34
@@ -21,8 +36,8 @@ android {
         applicationId = "com.qrferry.receiver"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.1.10"
+        versionCode = releaseVersionCode
+        versionName = releaseVersionName
     }
 
     if (keystoreProperties.containsKey("storeFile")) {
