@@ -567,11 +567,7 @@ class MainWindow(QMainWindow):
             return
         self._send_ctrl = ctrl
         self._backend = self._selected_backend(self._s_codec)
-        self._send_iter = (
-            ctrl.infinite_frames()
-            if isinstance(self._backend, ColorMatrixBackend)
-            else ctrl.rolling_frames()
-        )
+        self._send_iter = ctrl.infinite_frames()
         self._s_start.setText("停止发送")
         self._s_start.setChecked(True)
         self._send_timer.start(int(1000 / self._s_fps.value()))
@@ -613,10 +609,7 @@ class MainWindow(QMainWindow):
             data, ct, filename, sid, cfg,
             source_kind="file" if is_file else "text",
             source_path=self._file_path if is_file else None)
-        self._send_iter = (
-            self._send_ctrl.infinite_frames()
-            if is_color else self._send_ctrl.rolling_frames()
-        )
+        self._send_iter = self._send_ctrl.infinite_frames()
         self._s_start.setText("停止发送")
         self._send_timer.start(int(1000 / self._s_fps.value()))
         mode_desc = "持续流"

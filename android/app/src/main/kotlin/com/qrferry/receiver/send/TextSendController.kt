@@ -6,6 +6,7 @@ import com.qrferry.receiver.core.DataPayload
 import com.qrferry.receiver.core.FrameHeader
 import com.qrferry.receiver.core.FrameType
 import com.qrferry.receiver.core.LtDistribution
+import com.qrferry.receiver.core.LtEncoder
 import com.qrferry.receiver.core.ManifestPayload
 import com.qrferry.receiver.core.encodeFrame
 import com.qrferry.receiver.core.pack
@@ -13,7 +14,8 @@ import java.security.MessageDigest
 import java.util.zip.Deflater
 
 /**
- * Android 发送端：自适应压缩 -> 分块 -> MANIFEST/DATA 顺序滚动帧流。
+ * Android 发送端：自适应压缩 -> 分块 -> MANIFEST 周期重发 + LT 系统化喷泉流。
+ * DATA 符号由 LtEncoder 生成：前 K 个直发源块，之后无限 RSD 随机组合符号。
  */
 class TextSendController private constructor(
     private val raw: ByteArray,
@@ -43,6 +45,7 @@ class TextSendController private constructor(
             filename = filename,
         ).pack()
     )
+    private val ltEncoder = LtEncoder(blocks, sessionId)
     private var dataSinceManifest = manifestInterval
     private var nextSid = 0
 
@@ -76,11 +79,13 @@ class TextSendController private constructor(
 
     private fun nextDataFrame(): ByteArray {
         val sid = nextSid++
-        val blockIndex = sid % blocks.size
+        // LT 系统化流：前 K 个符号直发源块，之后 RSD 随机组合符号 —— 接收端收齐
+        // 任意 ~K 个符号即完成，漏帧无需等下一轮轮询到特定块（消除补帧长尾）。
+        val sym = ltEncoder.encodeSymbol(sid)
         val payload = DataPayload(
-            degree = 1,
-            adjacency = listOf(blockIndex),
-            xorData = blocks[blockIndex],
+            degree = sym.degree,
+            adjacency = sym.adjacency,
+            xorData = sym.xorData,
         ).pack()
         return encodeFrame(
             FrameHeader(FrameType.DATA.value, sessionId = sessionId, symbolId = sid),

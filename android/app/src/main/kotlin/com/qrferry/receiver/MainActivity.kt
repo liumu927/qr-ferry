@@ -10,7 +10,9 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.text.Editable
 import android.text.TextWatcher
@@ -55,12 +57,19 @@ class MainActivity : AppCompatActivity() {
     private lateinit var analysis: ImageAnalysis
     private val analysisExecutor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
+    // 发送渲染专用后台线程：帧生成+QR 编码渲染移出主线程，主线程只贴图。
+    private val sendThread = HandlerThread("qr-send").apply { start() }
+    private val sendHandler = Handler(sendThread.looper)
     private val colorRenderer = ColorMatrixRenderer()
     private val qrRenderer = QrRenderer()
     private var sendController: TextSendController? = null
     private var selectedFile: SelectedSendFile? = null
     private var sending = false
     private var previousScreenBrightness: Float? = null
+    // 发送节拍（启动发送时快照，避免后台线程读 UI 状态）
+    private var nextSendDeadline = 0L
+    private var sendPeriodMs = 125L
+    private var sendIsColor = false
 
     private val scanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder()
@@ -254,7 +263,11 @@ class MainActivity : AppCompatActivity() {
             binding.btnStartSend.text = "停止发送"
             binding.sendPlaceholder.visibility = View.GONE
             binding.sendStatusText.text = "发送中：K=${sendController?.K}，${selectedFps()} FPS"
-            mainHandler.post(sendTick)
+            // 节拍锚定：渲染耗时不再叠加到标称间隔上；渲染慢于周期时自然顺延（不追赶连发）
+            sendIsColor = isColorSend()
+            sendPeriodMs = 1000L / selectedFps()
+            nextSendDeadline = SystemClock.uptimeMillis()
+            sendHandler.post(sendTick)
         } catch (e: Exception) {
             stopSending("发送初始化失败: ${e.message}")
         }
@@ -265,16 +278,21 @@ class MainActivity : AppCompatActivity() {
             val ctrl = sendController
             if (!sending || ctrl == null) return
             try {
+                // 后台线程：帧生成 + 渲染（ZXing 编码耗时从这里移除主线程）
                 val frame = ctrl.nextFrame()
-                val bitmap = if (isColorSend()) colorRenderer.render(frame) else qrRenderer.render(frame)
-                binding.sendCodeView.setImageDrawable(
-                    BitmapDrawable(resources, bitmap).apply { isFilterBitmap = false }
-                )
-                binding.sendStatusText.text =
-                    "发送中：K=${ctrl.K} sid=${ctrl.sessionId} next=${ctrl.nextSymbolId} raw=${ctrl.rawSize}B"
-                mainHandler.postDelayed(this, 1000L / selectedFps())
+                val bitmap = if (sendIsColor) colorRenderer.render(frame) else qrRenderer.render(frame)
+                val status = "发送中：K=${ctrl.K} sid=${ctrl.sessionId} next=${ctrl.nextSymbolId} raw=${ctrl.rawSize}B"
+                mainHandler.post {
+                    if (!sending) return@post
+                    binding.sendCodeView.setImageDrawable(
+                        BitmapDrawable(resources, bitmap).apply { isFilterBitmap = false }
+                    )
+                    binding.sendStatusText.text = status
+                }
+                nextSendDeadline = maxOf(nextSendDeadline + sendPeriodMs, SystemClock.uptimeMillis())
+                sendHandler.postAtTime(this, nextSendDeadline)
             } catch (e: Exception) {
-                stopSending("发送失败: ${e.message}")
+                mainHandler.post { stopSending("发送失败: ${e.message}") }
             }
         }
     }
@@ -293,7 +311,7 @@ class MainActivity : AppCompatActivity() {
         previousScreenBrightness = null
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         sendController = null
-        mainHandler.removeCallbacks(sendTick)
+        sendHandler.removeCallbacks(sendTick)
         binding.btnStartSend.text = "开始发送"
         binding.sendCodecSpinner.isEnabled = true
         binding.sendFpsSpinner.isEnabled = true
@@ -506,6 +524,7 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         stopSending("已停止发送")
         analysisExecutor.shutdown()
+        sendThread.quitSafely()
         scanner.close()
     }
 
