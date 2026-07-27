@@ -6,9 +6,18 @@ degree 不符）、帧整体 CRC 完整性（篡改/截断/粘包一律拒绝）
 import pytest
 
 from qrferry.core.frame import (
-    VERSION, FrameHeader, FrameType, ContentType, Compression, LtDistribution,
-    ManifestPayload, DataPayload, EndPayload,
-    ProtocolError, encode_frame, decode_frame,
+    VERSION,
+    Compression,
+    ContentType,
+    DataPayload,
+    EndPayload,
+    FrameHeader,
+    FrameType,
+    LtDistribution,
+    ManifestPayload,
+    ProtocolError,
+    decode_frame,
+    encode_frame,
 )
 
 

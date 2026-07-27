@@ -7,23 +7,37 @@ from __future__ import annotations
 
 import os
 import random
-import time
 
 import cv2
 import numpy as np
 from PIL import Image
-from PySide6.QtCore import Qt, QPointF, QRect, QStandardPaths, QTimer
+from PySide6.QtCore import QPointF, QRect, QStandardPaths, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
-    QButtonGroup, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel,
-    QMainWindow, QMessageBox, QProgressBar, QPushButton, QSpinBox, QTabWidget,
-    QTextEdit, QVBoxLayout, QWidget)
+    QButtonGroup,
+    QComboBox,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QSpinBox,
+    QTabWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
-from qrferry.app.receive_pipeline import ReceivePipeline, safe_filename
 from qrferry.app.camera_devices import list_camera_devices, open_camera
+from qrferry.app.receive_pipeline import ReceivePipeline, safe_filename
 from qrferry.app.send_controller import (
-    COLOR_MATRIX_CHUNK_SIZE_LOG, COLOR_MATRIX_MAX_FRAME_BYTES,
-    SendController, SenderConfig,
+    COLOR_MATRIX_CHUNK_SIZE_LOG,
+    COLOR_MATRIX_MAX_FRAME_BYTES,
+    SendController,
+    SenderConfig,
 )
 from qrferry.core.frame import ContentType
 from qrferry.core.session import ReceiveSession
@@ -181,8 +195,8 @@ _RECEIVE_POLL_INTERVAL_MS = 34
 
 
 class MainWindow(QMainWindow):
-    GRID_OPTIONS = [("1×1", (1, 1)), ("2×2", (2, 2)), ("3×3", (3, 3))]
-    CODEC_OPTIONS = [("标准QR（推荐）", "qr"), ("彩色码（实验）", "color")]
+    GRID_OPTIONS = (("1×1", (1, 1)), ("2×2", (2, 2)), ("3×3", (3, 3)))
+    CODEC_OPTIONS = (("标准QR（推荐）", "qr"), ("彩色码（实验）", "color"))
 
     def __init__(self):
         super().__init__()
@@ -471,7 +485,7 @@ class MainWindow(QMainWindow):
         elif pipe is not None and pipe.session.manifest is not None:
             # 传输中：文本整包解码后才产生字符数，过程中只能给块恢复进度
             m = pipe.session.manifest
-            label = f"{int(round(pipe.progress * m.total_chunks))}/{m.total_chunks} 块"
+            label = f"{round(pipe.progress * m.total_chunks)}/{m.total_chunks} 块"
         else:
             label = "0 字符"
         self._r_count.setText(label)

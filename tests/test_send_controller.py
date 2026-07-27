@@ -4,8 +4,18 @@ import zlib
 
 import pytest
 
-from qrferry.app.send_controller import SendController, SenderConfig, recommend_chunk_size_log
-from qrferry.core.frame import Compression, ContentType, DataPayload, FrameType, decode_frame
+from qrferry.app.send_controller import (
+    SendController,
+    SenderConfig,
+    recommend_chunk_size_log,
+)
+from qrferry.core.frame import (
+    Compression,
+    ContentType,
+    DataPayload,
+    FrameType,
+    decode_frame,
+)
 from qrferry.core.session import ReceiveSession
 
 
@@ -34,7 +44,7 @@ def test_empty_data_rejected():
 
 
 def test_rounds_scale_stream_length():
-    common = dict(args=(b"x" * 1000, ContentType.TEXT, "", 1))
+    common = {"args": (b"x" * 1000, ContentType.TEXT, "", 1)}
     n1 = len(list(SendController(*common["args"], config=SenderConfig(rounds=1))))
     n3 = len(list(SendController(*common["args"], config=SenderConfig(rounds=3))))
     assert n1 < n3
@@ -134,7 +144,7 @@ def test_rolling_frames_recover_a_chunk_lost_in_first_cycle():
 
 
 def test_text_payload_has_empty_filename():
-    ctrl = SendController("hello".encode(), ContentType.TEXT, "", session_id=9,
+    ctrl = SendController(b"hello", ContentType.TEXT, "", session_id=9,
                          config=SenderConfig(rounds=1))
     # 第一帧是 MANIFEST
     header, payload = decode_frame(next(iter(ctrl)))

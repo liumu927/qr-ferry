@@ -8,18 +8,27 @@ from __future__ import annotations
 import base64
 import hashlib
 import zlib
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
-from typing import Iterator
 
 from qrferry.core import chunker, lt
 from qrferry.core.frame import (
-    Compression, DataPayload, EndPayload, FrameHeader, FrameType,
-    LtDistribution, ManifestPayload, encode_frame,
+    Compression,
+    DataPayload,
+    EndPayload,
+    FrameHeader,
+    FrameType,
+    LtDistribution,
+    ManifestPayload,
+    encode_frame,
 )
 
 __all__ = [
-    "SenderConfig", "SendController", "recommend_chunk_size_log",
-    "COLOR_MATRIX_CHUNK_SIZE_LOG", "COLOR_MATRIX_MAX_FRAME_BYTES",
+    "COLOR_MATRIX_CHUNK_SIZE_LOG",
+    "COLOR_MATRIX_MAX_FRAME_BYTES",
+    "SendController",
+    "SenderConfig",
+    "recommend_chunk_size_log",
 ]
 
 
@@ -242,7 +251,7 @@ class SendController:
         }
 
     @classmethod
-    def from_snapshot(cls, snap: dict) -> "SendController":
+    def from_snapshot(cls, snap: dict) -> SendController:
         """从快照重建发送端：FILE 模式重读文件并校验 raw_sha，TEXT 模式从 bin 还原。
 
         确定性根基：相同 (session_id, blocks) → encode_symbol(sid) 可复现，故只需把
@@ -266,9 +275,8 @@ class SendController:
             raise ValueError("快照缺少数据来源")
         with open(path, "rb") as f:
             data = f.read()
-        if kind == "file":
-            if hashlib.sha256(data).digest() != base64.b64decode(snap["raw_sha_b64"]):
-                raise ValueError(f"文件 {path} 自上次发送后已变更，无法续传")
+        if kind == "file" and hashlib.sha256(data).digest() != base64.b64decode(snap["raw_sha_b64"]):
+            raise ValueError(f"文件 {path} 自上次发送后已变更，无法续传")
         ctrl = cls(data, snap["content_type"], snap["filename"], snap["session_id"], cfg,
                    source_kind=kind, source_path=path)
         ctrl._next_sid = snap["next_sid"]

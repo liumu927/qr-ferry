@@ -1,7 +1,7 @@
 """GF(256) Reed-Solomon codec compatible with ZXing QR_CODE_FIELD_256."""
 from __future__ import annotations
 
-__all__ = ["ReedSolomonError", "encode", "decode"]
+__all__ = ["ReedSolomonError", "decode", "encode"]
 
 
 class ReedSolomonError(ValueError):
@@ -78,7 +78,7 @@ class _Poly:
             result = _FIELD.multiply(value, result) ^ coefficient
         return result
 
-    def add(self, other: "_Poly") -> "_Poly":
+    def add(self, other: _Poly) -> _Poly:
         if self.is_zero:
             return other
         if other.is_zero:
@@ -92,7 +92,7 @@ class _Poly:
             out[i + offset] ^= coefficient
         return _Poly(out)
 
-    def multiply(self, other: "_Poly") -> "_Poly":
+    def multiply(self, other: _Poly) -> _Poly:
         if self.is_zero or other.is_zero:
             return _Poly([0])
         out = [0] * (len(self.coefficients) + len(other.coefficients) - 1)
@@ -101,14 +101,14 @@ class _Poly:
                 out[i + j] ^= _FIELD.multiply(a, b)
         return _Poly(out)
 
-    def multiply_scalar(self, scalar: int) -> "_Poly":
+    def multiply_scalar(self, scalar: int) -> _Poly:
         if scalar == 0:
             return _Poly([0])
         if scalar == 1:
             return self
         return _Poly([_FIELD.multiply(value, scalar) for value in self.coefficients])
 
-    def multiply_monomial(self, degree: int, coefficient: int) -> "_Poly":
+    def multiply_monomial(self, degree: int, coefficient: int) -> _Poly:
         if degree < 0:
             raise ValueError("degree 不能为负数")
         if coefficient == 0:

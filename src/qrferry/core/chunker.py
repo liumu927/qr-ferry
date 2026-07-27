@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-__all__ = ["split", "join"]
+__all__ = ["join", "split"]
 
 
 def split(data: bytes, chunk_size: int) -> list[bytes]:

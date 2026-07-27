@@ -17,7 +17,7 @@ import math
 import random
 from collections import deque
 
-__all__ = ["DIST_RSD", "DIST_ISD", "DIST_DEGENERATE", "LtEncoder", "LtDecoder"]
+__all__ = ["DIST_DEGENERATE", "DIST_ISD", "DIST_RSD", "LtDecoder", "LtEncoder"]
 
 # 度分布类型（与 frame.LtDistribution 取值对齐：RSD=0, ISD=1, DEGENERATE=2）
 DIST_RSD = 0

@@ -8,7 +8,7 @@ import pytest
 pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication
 
-from qrferry.app.main_window import MainWindow, _RECEIVE_POLL_INTERVAL_MS, _build_style
+from qrferry.app.main_window import _RECEIVE_POLL_INTERVAL_MS, MainWindow, _build_style
 from qrferry.core.frame import ContentType
 
 
@@ -32,7 +32,7 @@ def test_window_constructs(qapp):
 
 def test_receive_uses_internal_poll_rate(qapp, monkeypatch):
     """接收端使用内部采集上限，不依赖用户输入。"""
-    import qrferry.app.main_window as main_window
+    from qrferry.app import main_window
 
     class FakeCamera:
         def isOpened(self):
@@ -97,7 +97,7 @@ def test_receive_count_text_complete_uses_chars_not_bytes(qapp):
     w = MainWindow()
     result = type("R", (), {
         "content_type": ContentType.TEXT,
-        "data": "你好ABC".encode("utf-8"),
+        "data": "你好ABC".encode(),
     })()
     session = type("S", (), {"manifest": None})()
     w._pipe = type("P", (), {"session": session, "result": result})

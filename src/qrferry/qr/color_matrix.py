@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import zlib
 from dataclasses import dataclass
+from typing import ClassVar
 
 import numpy as np
 from PIL import Image, ImageDraw
 
 from qrferry.qr.backend import CodecBackend
-from qrferry.qr.reed_solomon import ReedSolomonError, decode as rs_decode, encode as rs_encode
+from qrferry.qr.reed_solomon import ReedSolomonError
+from qrferry.qr.reed_solomon import decode as rs_decode
+from qrferry.qr.reed_solomon import encode as rs_encode
 
 __all__ = ["ColorMatrixBackend", "ColorMatrixError"]
 
@@ -75,7 +78,7 @@ class ColorMatrixBackend(CodecBackend):
     _ECC_BYTES = 64
     _CALIBRATION_SYMBOLS = (0, 1, 2, 3) * 4
     _GRID_SIZES = (32, 48, 64)
-    _MODULE_PX = {
+    _MODULE_PX: ClassVar[dict[int, int]] = {
         32: 18,
         48: 14,
         64: 12,

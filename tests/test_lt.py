@@ -8,8 +8,11 @@ import random
 import pytest
 
 from qrferry.core.lt import (
-    DIST_RSD, DIST_ISD,
-    LtEncoder, LtDecoder, _build_degree_cdf,
+    DIST_ISD,
+    DIST_RSD,
+    LtDecoder,
+    LtEncoder,
+    _build_degree_cdf,
 )
 
 
@@ -106,7 +109,7 @@ def test_round_trip_with_losses():
 
 def test_single_block():
     enc = LtEncoder([b"only"], session_id=1, dist=DIST_RSD)
-    degree, adj, xd = enc.encode_symbol(0)
+    _, adj, xd = enc.encode_symbol(0)
     assert adj == (0,)
     dec = LtDecoder(1, 4)
     dec.add_symbol(adj, xd)
@@ -117,6 +120,7 @@ def test_single_block():
 def test_degree_capped_for_large_k():
     """大 K 时 degree 受上限约束，DATA 帧不超 QR 安全容量（防 DataOverflowError）。"""
     import zlib
+
     from qrferry.core import chunker
     from qrferry.core.frame import DataPayload, FrameHeader, FrameType, encode_frame
 

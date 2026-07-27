@@ -4,8 +4,13 @@ import zlib
 
 from qrferry.core import chunker, lt
 from qrferry.core.frame import (
-    Compression, ContentType, DataPayload, FrameHeader, FrameType,
-    LtDistribution, ManifestPayload,
+    Compression,
+    ContentType,
+    DataPayload,
+    FrameHeader,
+    FrameType,
+    LtDistribution,
+    ManifestPayload,
 )
 from qrferry.core.session import ReceiveSession
 

@@ -7,12 +7,11 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Optional
 
-from qrferry.core.session import ReceiveSession
 from qrferry.app.send_controller import SendController
+from qrferry.core.session import ReceiveSession
 
-__all__ = ["save", "load", "clear", "save_sender", "load_sender", "clear_sender"]
+__all__ = ["clear", "clear_sender", "load", "load_sender", "save", "save_sender"]
 
 _DIR_NAME = ".qrferry"
 _PENDING_FILE = "pending.json"
@@ -37,7 +36,7 @@ def save(session: ReceiveSession, save_dir: str) -> None:
         json.dump(snap, f, ensure_ascii=False)
 
 
-def load(save_dir: str) -> Optional[ReceiveSession]:
+def load(save_dir: str) -> ReceiveSession | None:
     """读取未完成会话；无文件或损坏返回 None。"""
     path = _pending_path(save_dir)
     if not os.path.isfile(path):
@@ -79,7 +78,7 @@ def save_sender(ctrl: SendController, save_dir: str) -> None:
         json.dump(snap, f, ensure_ascii=False)
 
 
-def load_sender(save_dir: str) -> Optional[SendController]:
+def load_sender(save_dir: str) -> SendController | None:
     """读取发送端快照重建 SendController；无文件/损坏/源失效返回 None。"""
     path = _sender_path(save_dir)
     if not os.path.isfile(path):

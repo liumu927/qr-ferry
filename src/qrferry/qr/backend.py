@@ -6,6 +6,11 @@ CodecBackend 抽象接口；StandardQrBackend 用 qrcode + Pillow 编码、zxing
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, ClassVar
+
+if TYPE_CHECKING:
+    from PIL import Image
+
 __all__ = ["CodecBackend", "StandardQrBackend"]
 
 
@@ -23,12 +28,13 @@ class CodecBackend:
 class StandardQrBackend(CodecBackend):
     """标准 QR 后端：qrcode 编码 + zxing-cpp 解码。"""
 
-    _ECC = {"L": "l", "M": "m", "Q": "q", "H": "h"}   # segno 用小写
+    _ECC: ClassVar[dict[str, str]] = {"L": "l", "M": "m", "Q": "q", "H": "h"}   # segno 用小写
 
     def encode(self, data: bytes, ecc_level: str = "Q",
                box_size: int = 10, border: int = 4) -> Image.Image:
-        import segno
         from io import BytesIO
+
+        import segno
         from PIL import Image
 
         qr = segno.make(data, error=self._ECC[ecc_level], mode="byte")
@@ -39,8 +45,8 @@ class StandardQrBackend(CodecBackend):
 
     def decode(self, image) -> list[bytes]:
         import numpy as np
-        from PIL import Image
         import zxingcpp
+        from PIL import Image
 
         if isinstance(image, Image.Image):
             image = np.array(image)

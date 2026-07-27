@@ -12,11 +12,21 @@ from enum import IntEnum
 from qrferry.core import crc32
 
 __all__ = [
-    "MAGIC", "VERSION", "HEADER_SIZE", "CRC_SIZE",
-    "FrameType", "ContentType", "Compression", "LtDistribution",
+    "CRC_SIZE",
+    "HEADER_SIZE",
+    "MAGIC",
+    "VERSION",
+    "Compression",
+    "ContentType",
+    "DataPayload",
+    "EndPayload",
+    "FrameHeader",
+    "FrameType",
+    "LtDistribution",
+    "ManifestPayload",
     "ProtocolError",
-    "FrameHeader", "ManifestPayload", "DataPayload", "EndPayload",
-    "encode_frame", "decode_frame",
+    "decode_frame",
+    "encode_frame",
 ]
 
 # ── 协议常量 ──────────────────────────────────────────────
@@ -77,7 +87,7 @@ class FrameHeader:
         )
 
     @staticmethod
-    def unpack(buf: bytes) -> "FrameHeader":
+    def unpack(buf: bytes) -> FrameHeader:
         if len(buf) < HEADER_SIZE:
             raise ProtocolError("header 长度不足")
         magic, version, ftype, sid, stream, sym, plen = struct.unpack_from(_HEADER_FMT, buf, 0)
@@ -121,7 +131,7 @@ class ManifestPayload:
         return out
 
     @staticmethod
-    def unpack(buf: bytes) -> "ManifestPayload":
+    def unpack(buf: bytes) -> ManifestPayload:
         # 固定前缀 = <BBBBI>(8) + <QQ>(16) + <B>(1) = 25
         if len(buf) < 25 + _SHA256_SIZE:
             raise ProtocolError("manifest payload 过短")
@@ -148,18 +158,18 @@ class DataPayload:
     def pack(self) -> bytes:
         if len(self.adjacency) != self.degree:
             raise ProtocolError("adjacency 长度与 degree 不符")
-        out = struct.pack("<H%dI" % self.degree, self.degree, *self.adjacency)
+        out = struct.pack(f"<H{self.degree}I", self.degree, *self.adjacency)
         return out + self.xor_data
 
     @staticmethod
-    def unpack(buf: bytes) -> "DataPayload":
+    def unpack(buf: bytes) -> DataPayload:
         if len(buf) < 2:
             raise ProtocolError("data payload 过短")
         (degree,) = struct.unpack_from("<H", buf, 0)
         adj_end = 2 + degree * 4
         if len(buf) < adj_end:
             raise ProtocolError("adjacency 越界")
-        adjacency = struct.unpack_from("<%dI" % degree, buf, 2) if degree else ()
+        adjacency = struct.unpack_from(f"<{degree}I", buf, 2) if degree else ()
         return DataPayload(degree, adjacency, bytes(buf[adj_end:]))
 
 
@@ -174,7 +184,7 @@ class EndPayload:
         return self.raw_sha256
 
     @staticmethod
-    def unpack(buf: bytes) -> "EndPayload":
+    def unpack(buf: bytes) -> EndPayload:
         if len(buf) != _SHA256_SIZE:
             raise ProtocolError("end payload 必须正好 32 字节")
         return EndPayload(bytes(buf))

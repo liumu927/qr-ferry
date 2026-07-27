@@ -2,6 +2,7 @@
 import os
 import random
 import tempfile
+
 from PIL import Image
 
 from qrferry.app.receive_pipeline import ReceivePipeline, safe_filename
@@ -37,7 +38,7 @@ def test_pipeline_file_result_stays_in_memory_until_saved():
 
 
 def test_pipeline_text_no_file_written():
-    text = "你好 qr-ferry".encode("utf-8")
+    text = "你好 qr-ferry".encode()
     sender = SendController(text, ContentType.TEXT, "", session_id=5,
                             config=SenderConfig(chunk_size_log=6, rounds=1))
     pipe = ReceivePipeline(backend=StandardQrBackend())
@@ -47,7 +48,7 @@ def test_pipeline_text_no_file_written():
 
 
 def test_pipeline_supports_uncompressed_payload():
-    text = "不压缩传输".encode("utf-8")
+    text = "不压缩传输".encode()
     sender = SendController(text, ContentType.TEXT, "", session_id=6,
                             config=SenderConfig(chunk_size_log=6, rounds=1, compression=0))
     pipe = ReceivePipeline(backend=StandardQrBackend())

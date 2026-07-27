@@ -14,8 +14,15 @@ import base64
 
 from qrferry.core import chunker, lt
 from qrferry.core.frame import (
-    Compression, ContentType, DataPayload, EndPayload, FrameHeader, FrameType,
-    LtDistribution, ManifestPayload, ProtocolError,
+    Compression,
+    ContentType,
+    DataPayload,
+    EndPayload,
+    FrameHeader,
+    FrameType,
+    LtDistribution,
+    ManifestPayload,
+    ProtocolError,
 )
 
 __all__ = ["ReceiveSession"]
@@ -130,7 +137,7 @@ class ReceiveSession:
         }
 
     @classmethod
-    def from_snapshot(cls, snap: dict) -> "ReceiveSession":
+    def from_snapshot(cls, snap: dict) -> ReceiveSession:
         """从快照重建会话：恢复 manifest 与已解出的源块（作为 peeling 种子）。"""
         m = ManifestPayload.unpack(base64.b64decode(snap["manifest_b64"]))
         block_size = 1 << m.chunk_size_log
