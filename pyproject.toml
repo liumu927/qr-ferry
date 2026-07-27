@@ -1,6 +1,6 @@
 [project]
 name = "qrferry"
-version = "0.1.0"
+version = "0.1.10"
 description = "光学二维码单向摆渡传输系统 - PC 端"
 requires-python = ">=3.11"
 license = { text = "TBD" }

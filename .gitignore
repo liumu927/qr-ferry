@@ -46,3 +46,8 @@ captures/
 *.ap_
 *.dex
 .qrferry/
+
+# Android release signing（本地保管，不入库）
+android/keystore/
+android/keystore.properties
+*.jks
