@@ -101,7 +101,9 @@ jobs:
           gh release create "${{ github.ref_name }}" \
             android/app/build/outputs/apk/release/qr-ferry-${{ github.ref_name }}-android.apk \
             --title "${{ github.ref_name }}" \
-            --generate-notes
+            --generate-notes \
+            || gh release upload "${{ github.ref_name }}" \
+               android/app/build/outputs/apk/release/qr-ferry-${{ github.ref_name }}-android.apk --clobber
 
   # PC 端 Windows 可执行包（PyInstaller）：tag 触发，与 Android 同一 Release。
   # needs release 确保 Release 已创建，PC 仅 upload 追加 zip，避免竞态。
