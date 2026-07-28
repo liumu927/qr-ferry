@@ -126,7 +126,9 @@ jobs:
           pip uninstall -y opencv-python
           pip install opencv-python-headless
       # 裁剪未用的 PySide6 大模块 + headless opencv，显著缩小 zip。
+      # shell: bash —— windows-latest 默认 pwsh 不认 `\` 续行，改用 git bash。
       - name: Build with PyInstaller
+        shell: bash
         run: |
           pyinstaller --noconfirm --windowed --name qr-ferry --paths src \
             --collect-all segno --collect-all zxingcpp \
