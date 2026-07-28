@@ -113,6 +113,8 @@ app/
 
 ### PC 端
 
+> 免安装：从 [Release](https://github.com/liumu927/qr-ferry/releases) 下载 Windows zip，解压运行 `qr-ferry.exe`。以下为源码运行方式。
+
 ```powershell
 cd E:\project\qr-ferry
 python -m venv .venv
