@@ -102,3 +102,30 @@ jobs:
             android/app/build/outputs/apk/release/qr-ferry-${{ github.ref_name }}-android.apk \
             --title "${{ github.ref_name }}" \
             --generate-notes
+
+  # PC 端 Windows 可执行包（PyInstaller）：tag 触发，与 Android 同一 Release。
+  # needs release 确保 Release 已创建，PC 仅 upload 追加 zip，避免竞态。
+  release-pc:
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+      # --paths src 让 PyInstaller 找到 qrferry 包；--collect-all 收 segno 模板与 zxingcpp C 扩展。
+      - name: Build with PyInstaller
+        run: pyinstaller --noconfirm --windowed --name qr-ferry --paths src --collect-all segno --collect-all zxingcpp scripts/run_app.py
+      - name: Package zip
+        run: Compress-Archive -Path dist\qr-ferry -DestinationPath qr-ferry-${{ github.ref_name }}-windows-x64.zip
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" "qr-ferry-${{ github.ref_name }}-windows-x64.zip" --clobber
