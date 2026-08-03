@@ -28,6 +28,7 @@ __all__ = [
     "COLOR_MATRIX_MAX_FRAME_BYTES",
     "SendController",
     "SenderConfig",
+    "chunk_size_log_for_frame_bytes",
     "recommend_chunk_size_log",
 ]
 
@@ -57,6 +58,25 @@ def recommend_chunk_size_log(encoded_size: int, grid: tuple[int, int] = (1, 1)) 
     if encoded_size >= 128 * 1024:
         return 8
     return DEFAULT_CHUNK_SIZE_LOG
+
+
+# DATA 帧固定开销：header 18 + degree 2 + adjacency 4×MAX_DEGREE + CRC 4。
+# 每帧有效载荷≈源块大小（xor_data），帧长上限必须减去该开销才是可用预算。
+_FRAME_FIXED_OVERHEAD = 18 + 2 + 4 * lt.MAX_DEGREE + 4   # = 144
+
+
+def chunk_size_log_for_frame_bytes(max_frame_bytes: int) -> int:
+    """按帧长上限反推源块档位：取满足 chunk + 固定开销 ≤ max_frame_bytes 的最大 2 的幂。
+
+    例：700→9(512B)、1200→10(1024B)、2200→11(2048B)。
+    """
+    budget = max_frame_bytes - _FRAME_FIXED_OVERHEAD
+    log = 0
+    while (1 << (log + 1)) <= budget:
+        log += 1
+    if log < 1:
+        raise ValueError(f"max_frame_bytes={max_frame_bytes} 过小，无法容纳源块与帧开销")
+    return log
 
 
 @dataclass

@@ -18,6 +18,13 @@ def qapp():
     yield app
 
 
+@pytest.fixture(autouse=True)
+def _stub_camera_probe(monkeypatch):
+    """主窗口构建即触发后台摄像头探测；测试环境打桩为空，避免真实打开设备。"""
+    from qrferry.app import main_window
+    monkeypatch.setattr(main_window, "probe_available_cameras", lambda max_index=9: [])
+
+
 def test_window_constructs(qapp):
     w = MainWindow()
     assert w.tabs.count() == 2

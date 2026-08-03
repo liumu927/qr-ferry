@@ -1,10 +1,18 @@
 """按 OpenCV 实际索引枚举和打开摄像头设备。"""
 from __future__ import annotations
 
+import subprocess
 import sys
 from dataclasses import dataclass
 
-__all__ = ["CameraDevice", "list_camera_devices", "open_camera", "resolve_camera_index"]
+__all__ = [
+    "CameraDevice",
+    "list_camera_devices",
+    "open_camera",
+    "probe_available_cameras",
+    "query_camera_friendly_names",
+    "resolve_camera_index",
+]
 
 
 @dataclass(frozen=True)
@@ -90,6 +98,42 @@ def _probe_index(index: int) -> bool:
         return bool(cap.isOpened())
     finally:
         cap.release()
+
+
+def query_camera_friendly_names() -> list[str]:
+    """Windows 上经 PowerShell 尽力枚举相机友好名；非 Windows 或任何失败返回空列表。
+
+    只读系统查询，不引入新依赖；输出顺序与 OpenCV 索引无严格对应关系，仅作显示参考。
+    """
+    if sys.platform != "win32":
+        return []
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             ("Get-PnpDevice -Class CAMERA -ErrorAction SilentlyContinue "
+              "| Select-Object -ExpandProperty FriendlyName")],
+            capture_output=True, text=True, timeout=8, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0 or not proc.stdout:
+        return []
+    return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+
+
+def probe_available_cameras(max_index: int = 9) -> list[CameraDevice]:
+    """真实探测 0..max_index-1：逐个 open_camera 试开，只保留能打开的设备。
+
+    名称优先用系统友好名（按枚举位置尽力对应），取不到时回退 "Camera N"。
+    """
+    names = query_camera_friendly_names()
+    devices: list[CameraDevice] = []
+    for index in range(max_index):
+        if _probe_index(index):
+            name = names[index] if index < len(names) else f"Camera {index}"
+            devices.append(CameraDevice(index=index, name=name, available=True))
+    return devices
 
 
 def _import_cv2():

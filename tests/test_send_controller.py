@@ -258,3 +258,32 @@ def test_sender_snapshot_rejects_changed_file(tmp_path):
     path.write_bytes(b"tampered content")
     with pytest.raises(ValueError):
         SendController.from_snapshot(snap)
+
+
+def test_chunk_size_log_for_frame_bytes():
+    """帧长上限与源块档位联动：700→512B、1200→1024B、2200→2048B。"""
+    from qrferry.app.send_controller import chunk_size_log_for_frame_bytes
+
+    assert chunk_size_log_for_frame_bytes(700) == 9
+    assert chunk_size_log_for_frame_bytes(1200) == 10
+    assert chunk_size_log_for_frame_bytes(2200) == 11
+    with pytest.raises(ValueError):
+        chunk_size_log_for_frame_bytes(100)
+
+
+def test_chunk_size_log_for_frame_bytes_frames_fit():
+    """联动档位下，系统化流（degree=1）与满 degree 帧均不超帧长上限。"""
+    from qrferry.app.send_controller import chunk_size_log_for_frame_bytes
+
+    for frame_bytes in (700, 1200, 2200):
+        data = _rand(64 * 1024, 42)
+        ctrl = SendController(
+            data, ContentType.FILE, "f.bin", session_id=3,
+            config=SenderConfig(
+                chunk_size_log=chunk_size_log_for_frame_bytes(frame_bytes),
+                max_frame_bytes=frame_bytes, rounds=1, redundancy=1.0,
+            ),
+        )
+        frames = [f for f in ctrl if len(f) > 100]   # DATA 帧（滤掉 MANIFEST/END）
+        assert frames
+        assert max(len(f) for f in frames) <= frame_bytes

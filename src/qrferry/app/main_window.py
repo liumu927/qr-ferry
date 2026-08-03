@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 import os
+import queue
 import random
+import threading
 
 import cv2
 import numpy as np
 from PIL import Image
-from PySide6.QtCore import QPointF, QRect, QStandardPaths, Qt, QTimer
+from PySide6.QtCore import QPointF, QRect, QStandardPaths, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -31,13 +33,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from qrferry.app.camera_devices import list_camera_devices, open_camera
+from qrferry.app.camera_devices import open_camera, probe_available_cameras
 from qrferry.app.receive_pipeline import ReceivePipeline, safe_filename
 from qrferry.app.send_controller import (
     COLOR_MATRIX_CHUNK_SIZE_LOG,
     COLOR_MATRIX_MAX_FRAME_BYTES,
     SendController,
     SenderConfig,
+    chunk_size_log_for_frame_bytes,
 )
 from qrferry.core.frame import ContentType
 from qrferry.core.session import ReceiveSession
@@ -190,13 +193,17 @@ QPushButton#seg:checked {{ background: {card}; color: {accent}; }}
 _SENDER_STATE_DIR = os.path.expanduser("~/.qrferry")
 _RECEIVER_STATE_ROOT = os.path.expanduser("~")
 
-# 接收轮询以 30 FPS 为上限；解码占用主线程时，QTimer 会自然按处理能力降速。
+# 接收轮询以 30 FPS 为上限；解码在后台线程进行，只保留最新一帧，慢解码时自然丢帧降速。
 _RECEIVE_POLL_INTERVAL_MS = 34
 
 
 class MainWindow(QMainWindow):
     GRID_OPTIONS = (("1×1", (1, 1)), ("2×2", (2, 2)), ("3×3", (3, 3)))
     CODEC_OPTIONS = (("标准QR（推荐）", "qr"), ("彩色码（实验）", "color"))
+    # 后台线程 → UI 线程的 queued 信号（跨线程 emit 自动排队，不在工作线程碰 widget）
+    _decode_progress = Signal()
+    _decode_error = Signal(str)
+    _camera_probe_done = Signal(object)
 
     def __init__(self):
         super().__init__()
@@ -212,6 +219,13 @@ class MainWindow(QMainWindow):
         self._cap = None
         self._recv_timer = QTimer(self)
         self._recv_timer.timeout.connect(self._tick_recv)
+        # 后台解码线程状态：queue 为"只保留最新一帧"的槽位，_decode_stop 控制退出
+        self._decode_queue: queue.Queue | None = None
+        self._decode_stop = threading.Event()
+        self._decode_thread: threading.Thread | None = None
+        self._decode_progress.connect(self._on_decode_progress)
+        self._decode_error.connect(self._on_decode_error)
+        self._camera_probe_done.connect(self._on_camera_probe_done)
         self._file_path = ""
         self._dark = False
         self._build_ui()
@@ -350,9 +364,11 @@ class MainWindow(QMainWindow):
         left.addLayout(clear_row)
 
         for label, attr, items, cur in (
-            ("帧率(FPS)", "_s_fps", None, 8),
+            ("帧率(FPS)", "_s_fps", None, 12),
             ("码制", "_s_codec", [n for n, _ in self.CODEC_OPTIONS], None),
-            ("纠错级", "_s_ecc", ["L", "M", "Q", "H"], None),
+            ("纠错级", "_s_ecc", ["L", "M", "Q", "H"], "L"),
+            ("帧长", "_s_frame_bytes", ["700", "1200", "2200"], "1200"),
+            ("冗余", "_s_redundancy", ["1.2", "1.5", "2.0"], "1.5"),
             ("网格", "_s_grid", [n for n, _ in self.GRID_OPTIONS], None),
         ):
             row = QHBoxLayout()
@@ -361,7 +377,7 @@ class MainWindow(QMainWindow):
                 w = QSpinBox(); w.setRange(1, 30); w.setValue(cur)
             else:
                 w = QComboBox(); w.addItems(items)
-                if attr == "_s_ecc": w.setCurrentText("M")
+                if cur is not None: w.setCurrentText(cur)
             setattr(self, attr, w)
             row.addWidget(w)
             left.addLayout(row)
@@ -408,9 +424,13 @@ class MainWindow(QMainWindow):
         top = QHBoxLayout()
         left = QVBoxLayout()
         left.addWidget(QLabel("摄像头设备"))
+        cam_row = QHBoxLayout()
         self._r_cam = QComboBox()
-        self._refresh_camera_devices()
-        left.addWidget(self._r_cam)
+        cam_row.addWidget(self._r_cam, 1)
+        self._cam_refresh_btn = QPushButton("刷新")
+        self._cam_refresh_btn.clicked.connect(self._refresh_camera_devices)
+        cam_row.addWidget(self._cam_refresh_btn)
+        left.addLayout(cam_row)
         codec_row = QHBoxLayout(); codec_row.addWidget(QLabel("码制"))
         self._r_codec = QComboBox(); self._r_codec.addItems([n for n, _ in self.CODEC_OPTIONS])
         codec_row.addWidget(self._r_codec); left.addLayout(codec_row)
@@ -461,6 +481,8 @@ class MainWindow(QMainWindow):
         self._r_save.hide()
         copy_row.addWidget(self._r_save)
         lay.addLayout(copy_row)
+        # 所有控件就绪后再启动首次后台探测（探测期间会禁用下拉/开始/刷新）
+        self._refresh_camera_devices()
         return tab
 
     # ────────────── 字符统计角标 ──────────────
@@ -546,6 +568,10 @@ class MainWindow(QMainWindow):
         self._s_grid.setEnabled(not is_color)
         if is_color and self._s_grid.currentIndex() != 0:
             self._s_grid.setCurrentIndex(0)
+        # 彩色码帧长固定为 COLOR_MATRIX_MAX_FRAME_BYTES，帧长下拉同步禁用并复位
+        self._s_frame_bytes.setEnabled(not is_color)
+        if is_color and self._s_frame_bytes.currentText() != "1200":
+            self._s_frame_bytes.setCurrentText("1200")
 
     def _on_send_mode(self):
         is_file = self._s_file.isChecked()
@@ -610,11 +636,15 @@ class MainWindow(QMainWindow):
         self._backend = self._selected_backend(self._s_codec)
         is_color = isinstance(self._backend, ColorMatrixBackend)
         cfg = SenderConfig(
-            chunk_size_log=COLOR_MATRIX_CHUNK_SIZE_LOG if is_color else None,
+            chunk_size_log=(COLOR_MATRIX_CHUNK_SIZE_LOG if is_color
+                            else chunk_size_log_for_frame_bytes(
+                                int(self._s_frame_bytes.currentText()))),
             ecc_level=self._s_ecc.currentText(),
             grid=(1, 1) if is_color else self.GRID_OPTIONS[self._s_grid.currentIndex()][1],
             rounds=3,
-            max_frame_bytes=COLOR_MATRIX_MAX_FRAME_BYTES if is_color else SenderConfig().max_frame_bytes,
+            max_frame_bytes=(COLOR_MATRIX_MAX_FRAME_BYTES if is_color
+                             else int(self._s_frame_bytes.currentText())),
+            redundancy=float(self._s_redundancy.currentText()),
             manifest_interval=8 if is_color else 32,
         )
         sid = random.randint(1, 0xFFFFFFFF)
@@ -691,11 +721,32 @@ class MainWindow(QMainWindow):
 
     # ────────────── 接收 ──────────────
     def _refresh_camera_devices(self):
+        """后台真实探测摄像头：逐个试开，只保留可用设备；期间禁用相关控件。"""
         self._r_cam.clear()
-        for device in list_camera_devices(max_index=9, probe=False):
-            self._r_cam.addItem(device.label, device.index)
-        if self._r_cam.count() == 0:
+        self._r_cam.addItem("正在探测摄像头…", -1)
+        self._r_cam.setEnabled(False)
+        self._r_start.setEnabled(False)
+        self._cam_refresh_btn.setEnabled(False)
+        threading.Thread(
+            target=self._camera_probe_worker, name="cam-probe", daemon=True).start()
+
+    def _camera_probe_worker(self):
+        """探测线程：只做 open_camera 试开，结果经 Signal 回 UI 线程刷新下拉框。"""
+        devices = probe_available_cameras(max_index=9)
+        self._camera_probe_done.emit(devices)
+
+    def _on_camera_probe_done(self, devices):
+        self._r_cam.clear()
+        if devices:
+            for device in devices:
+                self._r_cam.addItem(device.label, device.index)
+            self._r_cam.setCurrentIndex(0)
+        else:
+            # 一个都探测不到时保留兜底项，行为与旧版一致
             self._r_cam.addItem("0 · Camera 0 (未打开)", 0)
+        self._r_cam.setEnabled(True)
+        self._r_start.setEnabled(True)
+        self._cam_refresh_btn.setEnabled(True)
 
     def _toggle_recv(self, checked: bool):
         if checked:
@@ -723,7 +774,8 @@ class MainWindow(QMainWindow):
         return None
 
     def _start_recv(self):
-        idx = int(self._r_cam.currentData() or 0)
+        data = self._r_cam.currentData()
+        idx = int(data) if data is not None and int(data) >= 0 else 0
         self._cap = open_camera(idx)
         if not self._cap.isOpened():
             QMessageBox.warning(self, "错误", f"无法打开摄像头 {idx}")
@@ -739,6 +791,9 @@ class MainWindow(QMainWindow):
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        # 60fps（设备支持时）：曝光随之缩短，降低相机曝光横跨屏幕两帧切换的
+        # 时间混帧概率——基准仿真显示混帧是高帧率下的主要丢帧来源。
+        cap.set(cv2.CAP_PROP_FPS, 60)
         resumed = self._probe_resume()
         recv_backend = self._selected_backend(self._r_codec)
         self._pipe = ReceivePipeline(
@@ -751,17 +806,79 @@ class MainWindow(QMainWindow):
         self._update_r_missing()
         self._update_r_stats()
         self._r_start.setText("停止接收")
+        self._cam_refresh_btn.setEnabled(False)
+        # 启动后台解码线程：解码/颜色转换均在工作线程，UI 线程只负责采集与预览
+        self._decode_queue = queue.Queue(maxsize=1)
+        self._decode_stop.clear()
+        self._decode_thread = threading.Thread(
+            target=self._decode_loop, args=(self._decode_queue,),
+            name="recv-decode", daemon=True)
+        self._decode_thread.start()
         self._recv_timer.start(_RECEIVE_POLL_INTERVAL_MS)
         self.statusBar().showMessage("接收中…")
 
     def _stop_recv(self):
         self._recv_timer.stop()
+        # 停后台解码线程：置退出标记后短超时 join，残余帧由 daemon 线程自然丢弃
+        self._decode_stop.set()
+        thread = self._decode_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=0.5)
+        self._decode_thread = None
+        self._decode_queue = None
         if self._cap is not None:
             self._cap.release()
             self._cap = None
         if self._r_start.isChecked():
             self._r_start.setChecked(False)
         self._r_start.setText("开始接收")
+        self._cam_refresh_btn.setEnabled(True)
+
+    def _decode_loop(self, q: queue.Queue):
+        """后台解码线程：只取槽位里的最新帧，慢解码时旧帧自然丢弃（等价原先的降速语义）。
+
+        ReceivePipeline 只在本线程访问；结果经 Signal 回 UI 线程。不碰 self._cap。
+        """
+        while not self._decode_stop.is_set():
+            try:
+                frame = q.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            pipe = self._pipe
+            if pipe is None:
+                continue
+            # 颜色转换按码制分支（彩色码 RGB / 标准 QR 灰度），与解码同在工作线程
+            if isinstance(pipe.backend, ColorMatrixBackend):
+                image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            else:
+                image = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            try:
+                pipe.process_image(image)
+            except ValueError as e:
+                self._decode_error.emit(str(e))
+                return
+            self._decode_progress.emit()
+
+    def _on_decode_progress(self):
+        """UI 线程：后台解码完一帧后的进度刷新（接收已停止时直接忽略）。"""
+        pipe = self._pipe
+        if self._cap is None or pipe is None:
+            return
+        self._r_progress.setValue(int(pipe.progress * 100))
+        self._update_r_count()
+        self._update_r_missing()
+        self._update_r_stats()
+        self.statusBar().showMessage(f"进度 {pipe.progress:.0%}")
+        if pipe.result is not None:
+            self._on_received()
+            self._stop_recv()
+
+    def _on_decode_error(self, message: str):
+        """UI 线程：后台解码报协议错误（接收已停止时忽略，避免重复弹窗）。"""
+        if self._cap is None:
+            return
+        self._stop_recv()
+        QMessageBox.warning(self, "错误", message)
 
     def _tick_recv(self):
         if self._cap is None or self._pipe is None:
@@ -771,24 +888,18 @@ class MainWindow(QMainWindow):
             return
         pix = QPixmap.fromImage(_qimage_from_cv(frame))
         self._cam_label.setPixmap(pix.scaled(self._cam_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        if isinstance(self._pipe.backend, ColorMatrixBackend):
-            image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        else:
-            image = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        try:
-            self._pipe.process_image(image)
-        except ValueError as e:
-            self._stop_recv()
-            QMessageBox.warning(self, "错误", str(e))
-            return
-        self._r_progress.setValue(int(self._pipe.progress * 100))
-        self._update_r_count()
-        self._update_r_missing()
-        self._update_r_stats()
-        self.statusBar().showMessage(f"进度 {self._pipe.progress:.0%}")
-        if self._pipe.result is not None:
-            self._on_received()
-            self._stop_recv()
+        # 投递到"只保留最新一帧"的槽位：槽满说明解码慢，丢旧帧投新帧
+        q = self._decode_queue
+        if q is not None:
+            if q.full():
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    pass
+            try:
+                q.put_nowait(frame)
+            except queue.Full:
+                pass
 
     def _on_received(self):
         r = self._pipe.result
