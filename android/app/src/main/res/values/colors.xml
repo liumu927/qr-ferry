@@ -12,4 +12,5 @@
     <color name="line">#FFE2E8F0</color>
     <color name="accent">#FF2563EB</color>
     <color name="accent_soft">#FFEFF6FF</color>
+    <color name="ic_launcher_background">#FFFFFF</color>
 </resources>

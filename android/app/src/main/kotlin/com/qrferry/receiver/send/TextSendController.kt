@@ -24,6 +24,7 @@ class TextSendController private constructor(
     val sessionId: Int,
     private val chunkSizeLog: Int,
     private val manifestInterval: Int = DEFAULT_MANIFEST_INTERVAL,
+    maxFrameBytes: Int = LtEncoder.DEFAULT_MAX_FRAME_BYTES,
 ) {
     private val compressed = deflate(raw)
     private val compression = if (compressed.size < raw.size) Compression.ZLIB else Compression.NONE
@@ -45,7 +46,7 @@ class TextSendController private constructor(
             filename = filename,
         ).pack()
     )
-    private val ltEncoder = LtEncoder(blocks, sessionId)
+    private val ltEncoder = LtEncoder(blocks, sessionId, maxFrameBytes)
     private var dataSinceManifest = manifestInterval
     private var nextSid = 0
 
@@ -59,6 +60,7 @@ class TextSendController private constructor(
         sessionId: Int,
         chunkSizeLog: Int,
         manifestInterval: Int = DEFAULT_MANIFEST_INTERVAL,
+        maxFrameBytes: Int = LtEncoder.DEFAULT_MAX_FRAME_BYTES,
     ) : this(
         raw = text.toByteArray(Charsets.UTF_8),
         contentType = ContentType.TEXT.value,
@@ -66,6 +68,7 @@ class TextSendController private constructor(
         sessionId = sessionId,
         chunkSizeLog = chunkSizeLog,
         manifestInterval = manifestInterval,
+        maxFrameBytes = maxFrameBytes,
     )
 
     fun nextFrame(): ByteArray {
@@ -98,12 +101,26 @@ class TextSendController private constructor(
         const val COLOR_CHUNK_SIZE_LOG = 9
         const val DEFAULT_MANIFEST_INTERVAL = 32
 
+        // DATA 帧固定开销：header 18 + degree 2 + adjacency 4×MAX_DEGREE(30) + CRC 4。
+        // 每帧有效载荷≈源块大小（xorData），帧长上限减去该开销才是源块可用预算。
+        private const val FRAME_FIXED_OVERHEAD = 18 + 2 + 4 * 30 + 4   // = 144
+
+        /** 按帧长上限反推源块档位：取满足 chunk + 固定开销 ≤ maxFrameBytes 的最大 2 的幂。 */
+        fun chunkSizeLogForFrameBytes(maxFrameBytes: Int): Int {
+            val budget = maxFrameBytes - FRAME_FIXED_OVERHEAD
+            var log = 0
+            while ((1 shl (log + 1)) <= budget) log++
+            require(log >= 1) { "maxFrameBytes=$maxFrameBytes 过小，无法容纳源块与帧开销" }
+            return log
+        }
+
         fun forFile(
             filename: String,
             bytes: ByteArray,
             sessionId: Int,
             chunkSizeLog: Int,
             manifestInterval: Int = DEFAULT_MANIFEST_INTERVAL,
+            maxFrameBytes: Int = LtEncoder.DEFAULT_MAX_FRAME_BYTES,
         ): TextSendController = TextSendController(
             raw = bytes,
             contentType = ContentType.FILE.value,
@@ -111,6 +128,7 @@ class TextSendController private constructor(
             sessionId = sessionId,
             chunkSizeLog = chunkSizeLog,
             manifestInterval = manifestInterval,
+            maxFrameBytes = maxFrameBytes,
         )
 
         private fun splitBlocks(data: ByteArray, blockSize: Int): List<ByteArray> {

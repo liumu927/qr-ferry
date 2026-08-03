@@ -38,6 +38,8 @@ import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+import com.qrferry.receiver.core.LtEncoder
 import com.qrferry.receiver.databinding.ActivityMainBinding
 import com.qrferry.receiver.pipeline.ReceivePipeline
 import com.qrferry.receiver.send.ColorMatrixRenderer
@@ -70,6 +72,7 @@ class MainActivity : AppCompatActivity() {
     private var nextSendDeadline = 0L
     private var sendPeriodMs = 125L
     private var sendIsColor = false
+    private var sendEcLevel = ErrorCorrectionLevel.L
 
     private val scanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder()
@@ -146,10 +149,27 @@ class MainActivity : AppCompatActivity() {
         val fpsAdapter = ArrayAdapter(
             this,
             android.R.layout.simple_spinner_item,
-            listOf("8 FPS", "12 FPS", "15 FPS")
+            FPS_OPTIONS.map { "$it FPS" }
         )
         fpsAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         binding.sendFpsSpinner.adapter = fpsAdapter
+        binding.sendFpsSpinner.setSelection(FPS_OPTIONS.indexOf(DEFAULT_FPS))
+
+        val frameBytesAdapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            FRAME_BYTES_OPTIONS.map { "帧长 $it B" }
+        )
+        frameBytesAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        binding.sendFrameBytesSpinner.adapter = frameBytesAdapter
+
+        val ecAdapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            listOf("纠错 L", "纠错 M")
+        )
+        ecAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        binding.sendEcSpinner.adapter = ecAdapter
         binding.sendTextInput.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
@@ -224,10 +244,17 @@ class MainActivity : AppCompatActivity() {
         }
         try {
             val sid = Random.nextInt(1, Int.MAX_VALUE)
+            // 帧长选项仅作用于标准 QR；彩色码（实验）路径保持原默认上限。
+            val maxFrameBytes = if (isColorSend()) {
+                LtEncoder.DEFAULT_MAX_FRAME_BYTES
+            } else {
+                selectedFrameBytes()
+            }
+            // 每帧有效载荷≈源块大小，源块档位随帧长联动（700→512B、1200→1024B、2200→2048B）。
             val chunkSizeLog = if (isColorSend()) {
                 TextSendController.COLOR_CHUNK_SIZE_LOG
             } else {
-                TextSendController.QR_CHUNK_SIZE_LOG
+                TextSendController.chunkSizeLogForFrameBytes(maxFrameBytes)
             }
             val manifestInterval = if (isColorSend()) 8 else TextSendController.DEFAULT_MANIFEST_INTERVAL
             sendController = if (isFileMode()) {
@@ -241,6 +268,7 @@ class MainActivity : AppCompatActivity() {
                     sessionId = sid,
                     chunkSizeLog = chunkSizeLog,
                     manifestInterval = manifestInterval,
+                    maxFrameBytes = maxFrameBytes,
                 )
             } else {
                 TextSendController(
@@ -248,6 +276,7 @@ class MainActivity : AppCompatActivity() {
                     sid,
                     chunkSizeLog = chunkSizeLog,
                     manifestInterval = manifestInterval,
+                    maxFrameBytes = maxFrameBytes,
                 )
             }
             sending = true
@@ -256,6 +285,8 @@ class MainActivity : AppCompatActivity() {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             binding.sendCodecSpinner.isEnabled = false
             binding.sendFpsSpinner.isEnabled = false
+            binding.sendFrameBytesSpinner.isEnabled = false
+            binding.sendEcSpinner.isEnabled = false
             binding.sendTypeToggle.isEnabled = false
             binding.sendTextInput.isEnabled = false
             binding.btnPickFile.isEnabled = false
@@ -265,6 +296,7 @@ class MainActivity : AppCompatActivity() {
             binding.sendStatusText.text = "发送中：K=${sendController?.K}，${selectedFps()} FPS"
             // 节拍锚定：渲染耗时不再叠加到标称间隔上；渲染慢于周期时自然顺延（不追赶连发）
             sendIsColor = isColorSend()
+            sendEcLevel = selectedEcLevel()
             sendPeriodMs = 1000L / selectedFps()
             nextSendDeadline = SystemClock.uptimeMillis()
             sendHandler.post(sendTick)
@@ -280,7 +312,11 @@ class MainActivity : AppCompatActivity() {
             try {
                 // 后台线程：帧生成 + 渲染（ZXing 编码耗时从这里移除主线程）
                 val frame = ctrl.nextFrame()
-                val bitmap = if (sendIsColor) colorRenderer.render(frame) else qrRenderer.render(frame)
+                val bitmap = if (sendIsColor) {
+                    colorRenderer.render(frame)
+                } else {
+                    qrRenderer.render(frame, sendEcLevel)
+                }
                 val status = "发送中：K=${ctrl.K} sid=${ctrl.sessionId} next=${ctrl.nextSymbolId} raw=${ctrl.rawSize}B"
                 mainHandler.post {
                     if (!sending) return@post
@@ -297,11 +333,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun selectedFps(): Int = when (binding.sendFpsSpinner.selectedItemPosition) {
-        0 -> 8
-        2 -> 15
-        else -> 12
-    }
+    private fun selectedFps(): Int =
+        FPS_OPTIONS.getOrElse(binding.sendFpsSpinner.selectedItemPosition) { DEFAULT_FPS }
+
+    private fun selectedFrameBytes(): Int =
+        FRAME_BYTES_OPTIONS.getOrElse(binding.sendFrameBytesSpinner.selectedItemPosition) {
+            LtEncoder.DEFAULT_MAX_FRAME_BYTES
+        }
+
+    private fun selectedEcLevel(): ErrorCorrectionLevel =
+        if (binding.sendEcSpinner.selectedItemPosition == 1) {
+            ErrorCorrectionLevel.M
+        } else {
+            ErrorCorrectionLevel.L
+        }
 
     private fun stopSending(message: String) {
         sending = false
@@ -315,6 +360,8 @@ class MainActivity : AppCompatActivity() {
         binding.btnStartSend.text = "开始发送"
         binding.sendCodecSpinner.isEnabled = true
         binding.sendFpsSpinner.isEnabled = true
+        binding.sendFrameBytesSpinner.isEnabled = true
+        binding.sendEcSpinner.isEnabled = true
         binding.sendTypeToggle.isEnabled = true
         binding.sendTextInput.isEnabled = true
         binding.btnClearSend.isEnabled = true
@@ -530,6 +577,9 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "qr-ferry-recv"
+        private val FPS_OPTIONS = listOf(5, 8, 10, 12, 15, 18, 20, 24, 30)
+        private const val DEFAULT_FPS = 12
+        private val FRAME_BYTES_OPTIONS = listOf(700, 1200, 2200)
     }
 
     private data class SelectedSendFile(

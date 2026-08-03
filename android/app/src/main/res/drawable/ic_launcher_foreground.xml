@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 对齐 PC 端 64×64 设计：三定位角（#0F172A，白色内孔）+ 中心蓝块（#2563EB）。
+     64→72 安全区等比 ×1.125，整体偏移 (18,18) 落入 108×108 AdaptiveIcon 视口。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 三个定位角方块（18×18→20.25），evenOdd 挖出 8×8→9 的白色内孔（偏移 5→5.625） -->
+    <path
+        android:fillColor="#0F172A"
+        android:fillType="evenOdd"
+        android:pathData="M24.75,24.75 h20.25 v20.25 h-20.25 z M30.375,30.375 h9 v9 h-9 z M63,24.75 h20.25 v20.25 h-20.25 z M68.625,30.375 h9 v9 h-9 z M24.75,63 h20.25 v20.25 h-20.25 z M30.375,68.625 h9 v9 h-9 z" />
+
+    <!-- 中心蓝块 14×14→15.75，左上角 (25,25)→(46.125,46.125) -->
+    <path
+        android:fillColor="#2563EB"
+        android:pathData="M46.125,46.125 h15.75 v15.75 h-15.75 z" />
+</vector>
