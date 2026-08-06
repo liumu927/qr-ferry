@@ -47,6 +47,11 @@ from qrferry.core.session import ReceiveSession
 from qrferry.qr.backend import StandardQrBackend
 from qrferry.qr.color_matrix import ColorMatrixBackend
 
+# 解码降采样目标宽度：高拍仪等设备常无视 720p 请求仍输出 1080p，zxing 全图扫描成本
+# ~O(像素数)，1080p 解码慢于采集会堵满解码队列（maxsize=1）丢帧 → 有效帧率远低于采集。
+# 缩到 ≤此宽度后解码提速 ~2-3x；仅作用于解码路径，预览仍用原始帧。
+_DECODE_MAX_WIDTH = 720
+
 
 def _qimage_from_pil(img: Image.Image) -> QImage:
     if img.mode == "L":
@@ -193,10 +198,6 @@ QPushButton#seg:checked {{ background: {card}; color: {accent}; }}
 _SENDER_STATE_DIR = os.path.expanduser("~/.qrferry")
 _RECEIVER_STATE_ROOT = os.path.expanduser("~")
 
-# 接收轮询以 30 FPS 为上限；解码在后台线程进行，只保留最新一帧，慢解码时自然丢帧降速。
-_RECEIVE_POLL_INTERVAL_MS = 34
-
-
 class MainWindow(QMainWindow):
     GRID_OPTIONS = (("1×1", (1, 1)), ("2×2", (2, 2)), ("3×3", (3, 3)))
     CODEC_OPTIONS = (("标准QR（推荐）", "qr"), ("彩色码（实验）", "color"))
@@ -204,6 +205,7 @@ class MainWindow(QMainWindow):
     _decode_progress = Signal()
     _decode_error = Signal(str)
     _camera_probe_done = Signal(object)
+    _frame_ready = Signal(object)   # 采集线程 → UI：最新帧（np.ndarray），用于刷新预览
 
     def __init__(self):
         super().__init__()
@@ -217,8 +219,10 @@ class MainWindow(QMainWindow):
         self._send_timer.timeout.connect(self._tick_send)
         self._pipe: ReceivePipeline | None = None
         self._cap = None
-        self._recv_timer = QTimer(self)
-        self._recv_timer.timeout.connect(self._tick_recv)
+        # 采集/解码均在工作线程，UI 不碰 cap：_capture_loop 负责 open+read+release，
+        # 帧经 _frame_ready 回 UI 刷新预览、经 _decode_queue 喂 _decode_loop。避免 open/read 阻塞 UI。
+        self._capture_stop = threading.Event()
+        self._capture_thread: threading.Thread | None = None
         # 后台解码线程状态：queue 为"只保留最新一帧"的槽位，_decode_stop 控制退出
         self._decode_queue: queue.Queue | None = None
         self._decode_stop = threading.Event()
@@ -226,6 +230,7 @@ class MainWindow(QMainWindow):
         self._decode_progress.connect(self._on_decode_progress)
         self._decode_error.connect(self._on_decode_error)
         self._camera_probe_done.connect(self._on_camera_probe_done)
+        self._frame_ready.connect(self._on_frame_ready)
         self._file_path = ""
         self._dark = False
         self._build_ui()
@@ -706,8 +711,9 @@ class MainWindow(QMainWindow):
             imgs = [self._backend.encode(f, ecc_level=ecc, box_size=6, border=2) for f in frames]
             img = self._compose_grid(imgs)
         pix = QPixmap.fromImage(_qimage_from_pil(img))
-        transform = Qt.FastTransformation if isinstance(self._backend, ColorMatrixBackend) else Qt.SmoothTransformation
-        self._qr_label.setPixmap(pix.scaled(self._qr_label.size(), Qt.KeepAspectRatio, transform))
+        # QR 是离散黑白模块矩阵，必须最近邻（Fast）保留方块锐利；双线性（Smooth）会在模块
+        # 边缘产生灰色过渡，高密度帧（zip 满载）缩放后易致接收端 zxing 误读 → 重组数据损坏。
+        self._qr_label.setPixmap(pix.scaled(self._qr_label.size(), Qt.KeepAspectRatio, Qt.FastTransformation))
 
     def _compose_grid(self, imgs):
         rows, cols = self._send_ctrl.config.grid
@@ -776,24 +782,6 @@ class MainWindow(QMainWindow):
     def _start_recv(self):
         data = self._r_cam.currentData()
         idx = int(data) if data is not None and int(data) >= 0 else 0
-        self._cap = open_camera(idx)
-        if not self._cap.isOpened():
-            QMessageBox.warning(self, "错误", f"无法打开摄像头 {idx}")
-            self._cap = None
-            self._r_start.setChecked(False)
-            return
-        # 链路调优（手机虚拟摄像头尤其关键）：
-        # - MJPG 压缩：USB 虚拟摄像头默认 YUYV 未压缩，高分辨率带宽不足会严重掉帧 → 进度慢。
-        # - 缓冲 1 帧：默认多帧缓冲会让 read() 返回过时画面，屏幕 QR 快速切换时识别率暴跌。
-        # - 固定 720p：在细节清晰度与带宽之间取平衡。set() 失败（设备不支持）静默忽略。
-        cap = self._cap
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        # 60fps（设备支持时）：曝光随之缩短，降低相机曝光横跨屏幕两帧切换的
-        # 时间混帧概率——基准仿真显示混帧是高帧率下的主要丢帧来源。
-        cap.set(cv2.CAP_PROP_FPS, 60)
         resumed = self._probe_resume()
         recv_backend = self._selected_backend(self._r_codec)
         self._pipe = ReceivePipeline(
@@ -807,28 +795,35 @@ class MainWindow(QMainWindow):
         self._update_r_stats()
         self._r_start.setText("停止接收")
         self._cam_refresh_btn.setEnabled(False)
-        # 启动后台解码线程：解码/颜色转换均在工作线程，UI 线程只负责采集与预览
+        # 采集/解码都在工作线程，UI 仅启动线程后立即返回（open/read 在 _capture_loop 内）
         self._decode_queue = queue.Queue(maxsize=1)
         self._decode_stop.clear()
+        self._capture_stop.clear()
         self._decode_thread = threading.Thread(
             target=self._decode_loop, args=(self._decode_queue,),
             name="recv-decode", daemon=True)
         self._decode_thread.start()
-        self._recv_timer.start(_RECEIVE_POLL_INTERVAL_MS)
-        self.statusBar().showMessage("接收中…")
+        self._capture_thread = threading.Thread(
+            target=self._capture_loop, args=(idx,),
+            name="recv-capture", daemon=True)
+        self._capture_thread.start()
+        self.statusBar().showMessage("正在打开摄像头…")
 
     def _stop_recv(self):
-        self._recv_timer.stop()
-        # 停后台解码线程：置退出标记后短超时 join，残余帧由 daemon 线程自然丢弃
+        # 先停采集线程：置退出标记后短超时 join，cap 由 _capture_loop 退出时自行 release
+        self._capture_stop.set()
+        cthread = self._capture_thread
+        if cthread is not None and cthread.is_alive():
+            cthread.join(timeout=1.0)
+        self._capture_thread = None
+        self._cap = None
+        # 再停后台解码线程：残余帧由 daemon 线程自然丢弃
         self._decode_stop.set()
-        thread = self._decode_thread
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=0.5)
+        dthread = self._decode_thread
+        if dthread is not None and dthread.is_alive():
+            dthread.join(timeout=0.5)
         self._decode_thread = None
         self._decode_queue = None
-        if self._cap is not None:
-            self._cap.release()
-            self._cap = None
         if self._r_start.isChecked():
             self._r_start.setChecked(False)
         self._r_start.setText("开始接收")
@@ -852,6 +847,12 @@ class MainWindow(QMainWindow):
                 image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             else:
                 image = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            # 解码前降采样（见 _DECODE_MAX_WIDTH 注释）：设备无视 720p 输出 1080p 时，
+            # 缩到 ≤720 宽再喂 zxing。INTER_AREA 缩小时做像素平均抗混叠，并抑制高频噪点，
+            # 对 zxing 的 LocalAverage 二值化更友好（识别率常不降反升）。预览不受影响。
+            if image.shape[1] > _DECODE_MAX_WIDTH:
+                h = round(image.shape[0] * _DECODE_MAX_WIDTH / image.shape[1])
+                image = cv2.resize(image, (_DECODE_MAX_WIDTH, h), interpolation=cv2.INTER_AREA)
             try:
                 pipe.process_image(image)
             except ValueError as e:
@@ -862,7 +863,7 @@ class MainWindow(QMainWindow):
     def _on_decode_progress(self):
         """UI 线程：后台解码完一帧后的进度刷新（接收已停止时直接忽略）。"""
         pipe = self._pipe
-        if self._cap is None or pipe is None:
+        if self._capture_thread is None or pipe is None:
             return
         self._r_progress.setValue(int(pipe.progress * 100))
         self._update_r_count()
@@ -874,32 +875,58 @@ class MainWindow(QMainWindow):
             self._stop_recv()
 
     def _on_decode_error(self, message: str):
-        """UI 线程：后台解码报协议错误（接收已停止时忽略，避免重复弹窗）。"""
-        if self._cap is None:
+        """UI 线程：后台解码/采集报错（接收已停止时忽略，避免重复弹窗）。"""
+        if self._capture_thread is None:
             return
         self._stop_recv()
         QMessageBox.warning(self, "错误", message)
 
-    def _tick_recv(self):
-        if self._cap is None or self._pipe is None:
+    def _capture_loop(self, idx: int):
+        """采集线程：open + 链路参数 + 循环 read。open/read/release 全在此线程，
+        UI 经 _frame_ready 收帧刷新预览、经 _decode_queue 喂解码线程。失败经 _decode_error 报。
+        """
+        cap = open_camera(idx)
+        if not cap.isOpened():
+            self._decode_error.emit(f"无法打开摄像头 {idx}")
             return
-        ok, frame = self._cap.read()
-        if not ok:
+        # 链路调优（手机虚拟摄像头尤其关键）：
+        # - MJPG 压缩：USB 虚拟摄像头默认 YUYV 未压缩，高分辨率带宽不足会严重掉帧 → 进度慢。
+        # - 缓冲 1 帧：默认多帧缓冲会让 read() 返回过时画面，屏幕 QR 快速切换时识别率暴跌。
+        # - 固定 720p：在细节清晰度与带宽之间取平衡。set() 失败（设备不支持）静默忽略。
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        # 60fps（设备支持时）：曝光随之缩短，降低相机曝光横跨屏幕两帧切换的
+        # 时间混帧概率——基准仿真显示混帧是高帧率下的主要丢帧来源。
+        cap.set(cv2.CAP_PROP_FPS, 60)
+        self._cap = cap   # 标记 open 成功，供 _on_decode_progress / _on_decode_error 判"接收中"
+        while not self._capture_stop.is_set():
+            ok, frame = cap.read()
+            if not ok:
+                continue
+            self._frame_ready.emit(frame)
+            # 投递到"只保留最新一帧"的槽位：槽满说明解码慢，丢旧帧投新帧
+            q = self._decode_queue
+            if q is not None:
+                if q.full():
+                    try:
+                        q.get_nowait()
+                    except queue.Empty:
+                        pass
+                try:
+                    q.put_nowait(frame)
+                except queue.Full:
+                    pass
+        cap.release()
+        self._cap = None
+
+    def _on_frame_ready(self, frame):
+        """UI 线程：采集线程送来的最新帧，刷新预览（接收已停止时直接忽略）。"""
+        if self._capture_thread is None or self._pipe is None:
             return
         pix = QPixmap.fromImage(_qimage_from_cv(frame))
         self._cam_label.setPixmap(pix.scaled(self._cam_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        # 投递到"只保留最新一帧"的槽位：槽满说明解码慢，丢旧帧投新帧
-        q = self._decode_queue
-        if q is not None:
-            if q.full():
-                try:
-                    q.get_nowait()
-                except queue.Empty:
-                    pass
-            try:
-                q.put_nowait(frame)
-            except queue.Full:
-                pass
 
     def _on_received(self):
         r = self._pipe.result

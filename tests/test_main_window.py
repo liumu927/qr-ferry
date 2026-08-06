@@ -8,7 +8,7 @@ import pytest
 pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication
 
-from qrferry.app.main_window import _RECEIVE_POLL_INTERVAL_MS, MainWindow, _build_style
+from qrferry.app.main_window import MainWindow, _build_style
 from qrferry.core.frame import ContentType
 
 
@@ -38,7 +38,9 @@ def test_window_constructs(qapp):
 
 
 def test_receive_uses_internal_poll_rate(qapp, monkeypatch):
-    """接收端使用内部采集上限，不依赖用户输入。"""
+    """接收端采集在独立后台线程持续运行，不依赖用户输入帧率。"""
+    import numpy as np
+
     from qrferry.app import main_window
 
     class FakeCamera:
@@ -48,6 +50,9 @@ def test_receive_uses_internal_poll_rate(qapp, monkeypatch):
         def set(self, *_args):
             return True
 
+        def read(self):
+            return True, np.zeros((480, 640, 3), dtype=np.uint8)
+
         def release(self):
             pass
 
@@ -56,8 +61,9 @@ def test_receive_uses_internal_poll_rate(qapp, monkeypatch):
     monkeypatch.setattr(w, "_probe_resume", lambda: None)
 
     w._start_recv()
-    assert w._recv_timer.interval() == _RECEIVE_POLL_INTERVAL_MS
+    assert w._capture_thread is not None and w._capture_thread.is_alive()
     w._stop_recv()
+    assert w._capture_thread is None
 
 
 @pytest.mark.parametrize(

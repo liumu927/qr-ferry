@@ -75,7 +75,7 @@ class ReceivePipeline:
     def elapsed_seconds(self) -> float:
         if self.first_valid_frame_ts is None:
             return 0.0
-        return max(0.0, time.time() - self.first_valid_frame_ts)
+        return max(0.0, time.monotonic() - self.first_valid_frame_ts)
 
     @property
     def is_complete(self) -> bool:
@@ -97,7 +97,7 @@ class ReceivePipeline:
             added += 1
         self.valid_frames += added
         if added > 0 and self.first_valid_frame_ts is None:
-            self.first_valid_frame_ts = time.time()
+            self.first_valid_frame_ts = time.monotonic()
         if self.session.is_complete and not self._finalized:
             self._finalize()
         elif self._persist and added > 0:
