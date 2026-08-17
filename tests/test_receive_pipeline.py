@@ -128,9 +128,14 @@ def test_pipeline_counts_link_bytes_and_rate():
     assert pipe.valid_data_frames > 0
     assert pipe.link_bps_avg > 0
     assert pipe.fps_avg > 0
-    # 有效速率（去重，唯一符号×块大小/耗时）：> 0；喷泉冗余致其 ≤ 含重复的链路速率
+    # 有效速率（去重，唯一符号×块大小/耗时）：> 0；喷泉冗余/重复使唯一符号数
+    # ≤ 承载字节的有效帧数，故 effective ≤ link 数学上恒成立。
     assert pipe.effective_bps > 0
-    assert pipe.effective_bps <= pipe.link_bps_avg
+    # 计数层做精确断言（每个唯一符号必对应一次有效帧递增，不受时间影响）。
+    assert pipe.session.unique_symbols <= pipe.valid_data_frames
+    # bps 层受 time.monotonic 两次取样亚微秒抖动影响，在二者相等时偶发 ±ppm
+    # 翻转，故用相对容差同时兜住真回归（若 effective 数倍超 link 仍会失败）。
+    assert pipe.link_bps_avg >= pipe.effective_bps * (1 - 1e-3)
 
 
 def test_pipeline_eta_none_below_threshold():
