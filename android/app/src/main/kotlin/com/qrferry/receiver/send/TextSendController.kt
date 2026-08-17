@@ -49,6 +49,7 @@ class TextSendController private constructor(
     private val ltEncoder = LtEncoder(blocks, sessionId, maxFrameBytes)
     private var dataSinceManifest = manifestInterval
     private var nextSid = 0
+    private var manifestBurstLeft = MANIFEST_BURST   // 冷启动：开头连续发 MANIFEST，接收端任一帧即可锁会话
 
     val K: Int get() = blocks.size
     val rawSize: Int get() = raw.size
@@ -72,6 +73,10 @@ class TextSendController private constructor(
     )
 
     fun nextFrame(): ByteArray {
+        if (manifestBurstLeft > 0) {
+            manifestBurstLeft--
+            return manifestFrame
+        }
         if (dataSinceManifest >= manifestInterval) {
             dataSinceManifest = 0
             return manifestFrame
@@ -100,6 +105,7 @@ class TextSendController private constructor(
         const val QR_CHUNK_SIZE_LOG = 9
         const val COLOR_CHUNK_SIZE_LOG = 9
         const val DEFAULT_MANIFEST_INTERVAL = 32
+        const val MANIFEST_BURST = 5   // 冷启动会话头突发：开头连续发 N 帧 MANIFEST，缩短「未进会话」窗口
 
         // DATA 帧固定开销：header 18 + degree 2 + adjacency 4×MAX_DEGREE(30) + CRC 4。
         // 每帧有效载荷≈源块大小（xorData），帧长上限减去该开销才是源块可用预算。

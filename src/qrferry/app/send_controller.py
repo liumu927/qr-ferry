@@ -39,6 +39,7 @@ LARGE_SINGLE_CHUNK_SIZE_LOG = 9
 COLOR_MATRIX_CHUNK_SIZE_LOG = 9
 COLOR_MATRIX_MAX_FRAME_BYTES = 720
 DEFAULT_MANIFEST_INTERVAL = 32
+MANIFEST_BURST = 5   # 冷启动会话头突发：开头连续发 N 帧 MANIFEST，缩短接收端「未进会话」窗口
 
 
 def recommend_chunk_size_log(encoded_size: int, grid: tuple[int, int] = (1, 1)) -> int:
@@ -202,19 +203,26 @@ class SendController:
                 yield self.next_data_frame()
         yield self._end_frame
 
-    def infinite_frames(self) -> Iterator[bytes]:
-        """无限发送流：周期性 MANIFEST + 不断追加新的 DATA 符号。
+    def infinite_frames(self, manifest_burst: int = MANIFEST_BURST) -> Iterator[bytes]:
+        """无限发送流：开头连续突发 MANIFEST + 周期重发 MANIFEST + 不断追加新的 DATA 符号。
 
         光学单向链路无法保证接收端启动时机；该流适合 UI 持续发送，避免播完有限轮后停在 END。
+        manifest_burst 让开头连续数帧都是 MANIFEST：接收端相机尚未锁定/刚进会话时，
+        任意一帧（而非等 32 帧后的一帧）即可建立会话，尤其缩短小文件（短帧流）的冷启动窗口——
+        此前若错过首 MANIFEST，系统性源块也一并错过，整体被迫等下一周期，劣化为低速。
         """
+        burst_left = manifest_burst
         data_since_manifest = 0
         while True:
-            if data_since_manifest == 0:
+            if burst_left > 0:
+                burst_left -= 1
+                yield self._manifest_frame
+                continue
+            if self.config.manifest_interval > 0 and data_since_manifest >= self.config.manifest_interval:
+                data_since_manifest = 0
                 yield self._manifest_frame
             yield self.next_data_frame()
             data_since_manifest += 1
-            if self.config.manifest_interval > 0 and data_since_manifest >= self.config.manifest_interval:
-                data_since_manifest = 0
 
     def rolling_frames(self, manifest_interval: int | None = None) -> Iterator[bytes]:
         """顺序循环发送源块；丢失分片在下一轮自动补齐。"""

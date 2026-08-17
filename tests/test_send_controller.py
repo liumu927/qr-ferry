@@ -87,6 +87,36 @@ def test_auto_compression_uses_zlib_only_when_smaller():
     assert raw.config.compression == int(Compression.NONE)
 
 
+def test_infinite_frames_manifests_burst_at_start():
+    """无限流开头连续突发 MANIFEST，接收端冷启动任一帧即可锁会话。"""
+    from qrferry.app.send_controller import MANIFEST_BURST
+    from qrferry.core.frame import FrameType
+    ctrl = SendController(_rand(4000, 7), ContentType.FILE, "f.bin", session_id=3,
+                          config=SenderConfig(rounds=1))
+    frames = ctrl.infinite_frames()
+    for i in range(MANIFEST_BURST):
+        h, _ = decode_frame(next(frames))
+        assert h.frame_type == FrameType.MANIFEST, f"第 {i} 帧应为 MANIFEST"
+
+
+def test_infinite_frames_cold_start_completes_after_missing_manifest():
+    """冷启动：接收端错过开头若干帧仍能靠突发 MANIFEST 快速建立会话并恢复完整数据。"""
+    data = _rand(4032, 8)
+    ctrl = SendController(data, ContentType.FILE, "f.bin", session_id=5,
+                          config=SenderConfig(chunk_size_log=6, compression=int(Compression.NONE)))
+    frames = ctrl.infinite_frames()
+    sess = ReceiveSession()
+    for _ in range(3):   # 接收端在开头 miss 掉 3 帧（相机尚未锁定）
+        next(frames)
+    for fb in frames:
+        h, p = decode_frame(fb)
+        sess.ingest(h, p)
+        if sess.is_complete:
+            break
+    assert sess.is_complete
+    assert sess.reassemble() == data
+
+
 def test_rolling_frames_send_blocks_in_order():
     ctrl = SendController(
         _rand(600, 20),
