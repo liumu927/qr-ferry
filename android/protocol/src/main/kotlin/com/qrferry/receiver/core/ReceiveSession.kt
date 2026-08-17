@@ -13,6 +13,8 @@ class ReceiveSession {
         private set
     private var decoder: LtDecoder? = null
     private var ended: Boolean = false
+    var uniqueSymbols: Int = 0; private set   // 已收的不同 symbolId 数（ETA/速率基数）
+    private val seenSids = mutableSetOf<Int>()   // 去重：喷泉码 (sessionId, symbolId) 确定性映射
 
     val started: Boolean get() = manifest != null
     val K: Int get() = manifest?.totalChunks ?: 0
@@ -58,12 +60,15 @@ class ReceiveSession {
         manifest = m
         decoder = LtDecoder(m.totalChunks, blockSize)
         ended = false
+        seenSids.clear()
+        uniqueSymbols = 0
     }
 
     private fun onData(header: FrameHeader, payload: ByteArray) {
         val d = decoder ?: return
         val m = manifest ?: return
         if (header.sessionId != sessionId) return   // 未知会话 DATA：忽略（MANIFEST 未到）
+        if (header.symbolId in seenSids) return     // 重复符号：跳过避免冗余 peeling 消减
         val dp = DataPayload.unpack(payload)
         val blockSize = 1 shl m.chunkSizeLog
         if (dp.degree <= 0 || dp.xorData.size != blockSize)
@@ -73,6 +78,8 @@ class ReceiveSession {
         if (dp.adjacency.any { it < 0 || it >= K })
             throw ProtocolError("DATA adjacency 越界")
         d.addSymbol(dp.adjacency, dp.xorData)
+        seenSids.add(header.symbolId)
+        uniqueSymbols++
     }
 
     private fun onEnd(header: FrameHeader, payload: ByteArray) {

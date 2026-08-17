@@ -2,6 +2,7 @@ package com.qrferry.receiver.pipeline
 
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.qrferry.receiver.core.ContentType
+import com.qrferry.receiver.core.FrameType
 import com.qrferry.receiver.core.ManifestPayload
 import com.qrferry.receiver.core.Proto
 import com.qrferry.receiver.core.ProtocolError
@@ -12,6 +13,8 @@ import java.io.File
 import java.security.MessageDigest
 import android.os.SystemClock
 import java.util.zip.Inflater
+import kotlin.math.ceil
+import kotlin.math.sqrt
 
 /**
  * Layer 4 接收流水线 —— 对齐 src/qrferry/app/receive_pipeline.py。
@@ -33,10 +36,55 @@ class ReceivePipeline {
     var seenBarcodes: Int = 0; private set   // ML Kit 返回的码总数
     var validFrames: Int = 0; private set    // 成功 decode + ingest
     var badFrames: Int = 0; private set      // CRC/解析失败被丢弃
+    var validDataFrames: Int = 0; private set // 有效 DATA 帧数（不含 MANIFEST/END）
+    var totalValidBytes: Long = 0; private set // 累计有效 DATA 帧承载字节（链路搬运量）
+    private val samples = ArrayDeque<Pair<Long, Long>>()  // (elapsedRealtimeMs, bytes) 滑动窗口
     var firstValidFrameAtMs: Long? = null; private set
 
     val elapsedSeconds: Double
         get() = firstValidFrameAtMs?.let { (SystemClock.elapsedRealtime() - it).coerceAtLeast(0L) / 1000.0 } ?: 0.0
+
+    val linkBpsAvg: Double
+        get() { val e = elapsedSeconds; return if (e > 0) totalValidBytes / e else 0.0 }
+
+    val fpsAvg: Double
+        get() { val e = elapsedSeconds; return if (e > 0) validDataFrames / e else 0.0 }
+
+    /** 近 windowMs 滑动窗口的 (字节速率, 帧速率)：清理过期样本后求和。 */
+    private fun instantWindow(windowMs: Long = 2000L): Pair<Double, Double> {
+        val now = SystemClock.elapsedRealtime()
+        val cutoff = now - windowMs
+        while (samples.isNotEmpty() && samples.first().first < cutoff) samples.removeFirst()
+        if (samples.isEmpty()) return 0.0 to 0.0
+        val oldest = samples.first().first
+        val span = maxOf(1.0, (now - oldest) / 1000.0)
+        val total = samples.sumOf { it.second }
+        return (total / span) to (samples.size / span)
+    }
+
+    val linkBpsInstant: Double
+        get() = if (samples.size < 2) linkBpsAvg else instantWindow().first
+
+    val fpsInstant: Double
+        get() = if (samples.size < 2) fpsAvg else instantWindow().second
+
+    /** 预计剩余秒数：喷泉开销模型 + 唯一符号到达速率；门槛前返回 null。对齐 receive_pipeline.py:eta_seconds。 */
+    val etaSeconds: Double?
+        get() {
+            val unique = session.uniqueSymbols
+            val elapsed = elapsedSeconds
+            if (unique < 3 || elapsed < 1.0) return null
+            val k = K
+            if (k <= 0) return null
+            val expected = maxOf(k + 1, ceil(k * expectedOverhead(k)).toInt())
+            val redundancy = maxOf(1, expected - k)
+            val overshoot = unique - expected
+            val target = if (overshoot < 0) expected
+                         else expected + redundancy * (overshoot / redundancy + 1)
+            val rate = unique / elapsed
+            if (rate <= 0.0) return null
+            return (target - unique) / rate
+        }
 
     /** 处理一帧识别到的 QR 码集合；返回是否本次触发完成。 */
     fun process(barcodes: List<Barcode>): Boolean {
@@ -48,6 +96,13 @@ class ReceivePipeline {
                 val (header, payload) = decodeFrame(raw)
                 session.ingest(header, payload)
                 validFrames++
+                // 仅 DATA 帧承载链路字节；字节数取 manifest blockSize，与 onData 的 xorData 尺寸校验一致
+                if (header.frameType == FrameType.DATA.value && session.manifest != null) {
+                    val bs = (1 shl session.manifest!!.chunkSizeLog).toLong()
+                    totalValidBytes += bs
+                    validDataFrames++
+                    samples.addLast(SystemClock.elapsedRealtime() to bs)
+                }
                 if (firstValidFrameAtMs == null) {
                     firstValidFrameAtMs = SystemClock.elapsedRealtime()
                 }
@@ -86,6 +141,12 @@ class ReceivePipeline {
     }
 
     companion object {
+        /** 喷泉开销因子（含冗余）：1.2 + 9.6/√K，clamp [1.2, 2.5]。对齐 lt.py:expected_overhead。 */
+        private fun expectedOverhead(k: Int): Double {
+            val kk = maxOf(1, k).toDouble()
+            return maxOf(1.2, minOf(2.5, 1.2 + 9.6 / sqrt(kk)))
+        }
+
         /** 对齐 receive_pipeline.py: safe_filename —— basename + 过滤非法字符 + 截断 200。 */
         private fun safeFilename(name: String): String {
             val base = File(name).name

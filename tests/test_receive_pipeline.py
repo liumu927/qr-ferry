@@ -113,3 +113,34 @@ def test_pipeline_drop_rate_with_bad_frames():
     pipe.process_image(None)
     assert pipe.bad_frames == 1
     assert abs(pipe.drop_rate - 1 / 3) < 1e-9   # 1 bad / 3 total
+
+
+def test_pipeline_counts_link_bytes_and_rate():
+    """有效 DATA 帧累计 total_valid_bytes = N_DATA × block_size；均值速率/帧率 > 0。"""
+    data = _rand(2000, 3)
+    sender = SendController(data, ContentType.FILE, "f.bin", session_id=1,
+                            config=SenderConfig(chunk_size_log=6, rounds=1))
+    pipe = ReceivePipeline(backend=StandardQrBackend())
+    _drive(sender, pipe)
+    m = pipe.session.manifest
+    block_size = 1 << m.chunk_size_log
+    assert pipe.total_valid_bytes == pipe.valid_data_frames * block_size
+    assert pipe.valid_data_frames > 0
+    assert pipe.link_bps_avg > 0
+    assert pipe.fps_avg > 0
+    # 有效速率（去重，唯一符号×块大小/耗时）：> 0；喷泉冗余致其 ≤ 含重复的链路速率
+    assert pipe.effective_bps > 0
+    assert pipe.effective_bps <= pipe.link_bps_avg
+
+
+def test_pipeline_eta_none_below_threshold():
+    """unique_symbols<3 或 elapsed<1s 时 ETA 为 None。"""
+    data = _rand(2000, 4)
+    sender = SendController(data, ContentType.FILE, "f.bin", session_id=1,
+                            config=SenderConfig(chunk_size_log=6, rounds=1))
+    pipe = ReceivePipeline(backend=StandardQrBackend())
+    frames = list(sender)
+    from qrferry.core.frame import FrameType, decode_frame
+    manifest_f = next(f for f in frames if decode_frame(f)[0].frame_type == FrameType.MANIFEST)
+    pipe.process_image(pipe.backend.encode(manifest_f))
+    assert pipe.eta_seconds is None   # 仅 MANIFEST：unique=0 且 elapsed≈0

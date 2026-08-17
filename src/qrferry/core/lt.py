@@ -17,7 +17,7 @@ import math
 import random
 from collections import deque
 
-__all__ = ["DIST_DEGENERATE", "DIST_ISD", "DIST_RSD", "LtDecoder", "LtEncoder"]
+__all__ = ["DIST_DEGENERATE", "DIST_ISD", "DIST_RSD", "LtDecoder", "LtEncoder", "expected_overhead"]
 
 # 度分布类型（与 frame.LtDistribution 取值对齐：RSD=0, ISD=1, DEGENERATE=2）
 DIST_RSD = 0
@@ -227,3 +227,15 @@ class LtDecoder:
         for i, b in enumerate(blocks):
             if b is not None:
                 self.resolved[i] = b
+
+
+def expected_overhead(K: int) -> float:
+    """喷泉解码所需符号数相对源块数 K 的开销因子（含冗余），供接收端 ETA 估计。
+
+    基于 peeling decoder 实测（见模块 docstring）：小 K（≤256）约 K×1.8、大 K 趋近 K×1.2。
+    ``1.2 + 9.6/√K`` 拟合该曲线（K=256→1.8、K=10⁴→1.30），clamp 到 [1.2, 2.5]：
+    下界为大 K 渐近值，上界防小 K 估计过悲观（小文件本就秒传）。比 decimen 的
+    ``1.1 + 2.45/√k`` 略高，因本项目 MAX_DEGREE=30 截断使小 K 的解码开销更高。
+    """
+    k = max(1, K)
+    return max(1.2, min(2.5, 1.2 + 9.6 / math.sqrt(k)))

@@ -28,6 +28,9 @@ def test_probe_available_cameras_only_lists_openable(monkeypatch):
         def isOpened(self):
             return self._opened
 
+        def read(self):
+            return (self._opened, None)
+
         def release(self):
             pass
 
@@ -50,6 +53,25 @@ def test_probe_available_cameras_empty_when_none_openable(monkeypatch):
     class FakeCap:
         def isOpened(self):
             return False
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(camera_devices, "open_camera", lambda index: FakeCap())
+    monkeypatch.setattr(camera_devices, "query_camera_friendly_names", list)
+
+    assert camera_devices.probe_available_cameras(max_index=3) == []
+
+
+def test_probe_filters_devices_that_open_but_never_yield(monkeypatch):
+    """isOpened 成功但 read 永不出帧的「假可用」设备必须被过滤，否则选中后静默黑屏。"""
+
+    class FakeCap:
+        def isOpened(self):
+            return True
+
+        def read(self):
+            return (False, None)   # 打开成功但永不出帧（MSMF 协商错误场景）
 
         def release(self):
             pass

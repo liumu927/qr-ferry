@@ -35,7 +35,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="14dp"
-            app:checkedButton="@id/btnModeReceive"
+            app:checkedButton="@id/btnModeSend"
             app:selectionRequired="true"
             app:singleSelection="true">
 
@@ -103,7 +103,7 @@
                     android:id="@+id/sendTypeToggle"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    app:checkedButton="@id/btnSendText"
+                    app:checkedButton="@id/btnSendFile"
                     app:selectionRequired="true"
                     app:singleSelection="true">
 

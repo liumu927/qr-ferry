@@ -179,13 +179,16 @@ def test_receive_stats_displays_valid_and_dropped(qapp):
     w._pipe = type("P", (), {
         "session": session, "result": None, "progress": 0.4,
         "missing_indices": [], "is_complete": False,
-        "valid_frames": 50, "bad_frames": 5, "drop_rate": 5 / 55,
+        "valid_data_frames": 50, "bad_frames": 5, "drop_rate": 5 / 55,
         "missed_images": 12,
         "elapsed_seconds": 10.0,
+        "link_bps_instant": 0.0, "link_bps_avg": 0.0,
+        "fps_instant": 0.0, "eta_seconds": None,
+        "effective_bps": 0.0,
     })()
     w._recv_start_ts = 0.0
     w._update_r_stats()
-    text = w._r_stats.text()
+    text = w._r_stats_left.text()
     assert "有效 50" in text
     assert "丢弃 5" in text
     assert "9.1%" in text            # 5/55 ≈ 9.09% → :.1% = "9.1%"
@@ -202,15 +205,17 @@ def test_receive_stats_shows_throughput_when_complete(qapp):
     w._pipe = type("P", (), {
         "session": session, "result": result, "progress": 1.0,
         "missing_indices": [], "is_complete": True,
-        "valid_frames": 100, "bad_frames": 0, "drop_rate": 0.0,
+        "valid_data_frames": 100, "bad_frames": 0, "drop_rate": 0.0,
         "missed_images": 0,
         "elapsed_seconds": 2.0,
+        "link_bps_instant": 0.0, "link_bps_avg": 0.0,
+        "fps_instant": 0.0, "eta_seconds": None,
+        "effective_bps": 0.0,
     })()
     w._recv_start_ts = 0.0
     w._update_r_stats()
-    text = w._r_stats.text()
-    assert "有效 100" in text
-    assert "KB/s" in text            # 完成时显示吞吐量
+    assert "有效 100" in w._r_stats_left.text()
+    assert "KB/s" in w._r_stats_right.text()   # 完成时右侧显示吞吐量
 
 
 def test_received_file_waits_for_user_save(qapp):

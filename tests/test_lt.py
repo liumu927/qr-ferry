@@ -13,6 +13,7 @@ from qrferry.core.lt import (
     LtDecoder,
     LtEncoder,
     _build_degree_cdf,
+    expected_overhead,
 )
 
 
@@ -170,3 +171,16 @@ def test_missing_indices_empty_when_complete():
             break
     assert dec.is_complete
     assert dec.missing_indices == []
+
+
+def test_expected_overhead_clamped_and_decreasing():
+    """开销模型：小 K 触上界 2.5、K=256≈1.8、大 K 趋近 1.2，随 K 单调递减。"""
+    assert expected_overhead(1) == 2.5
+    assert expected_overhead(256) == pytest.approx(1.8, abs=1e-9)
+    assert expected_overhead(10000) == pytest.approx(1.296, abs=1e-9)
+    assert 1.2 <= expected_overhead(10**9) < 1.21
+    prev = float("inf")
+    for K in (1, 2, 4, 16, 64, 256, 1024, 4096, 65536):
+        cur = expected_overhead(K)
+        assert cur <= prev
+        prev = cur

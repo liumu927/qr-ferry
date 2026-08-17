@@ -7,13 +7,22 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import time
 import zlib
+from collections import deque
 from dataclasses import dataclass
 
 from qrferry.app import session_store
-from qrferry.core.frame import Compression, ContentType, ProtocolError, decode_frame
+from qrferry.core.frame import (
+    Compression,
+    ContentType,
+    FrameType,
+    ProtocolError,
+    decode_frame,
+)
+from qrferry.core.lt import expected_overhead
 from qrferry.core.session import ReceiveSession
 from qrferry.qr.backend import CodecBackend, StandardQrBackend
 
@@ -54,6 +63,9 @@ class ReceivePipeline:
         self.valid_frames = 0          # 有效帧数（CRC 通过并入会话）
         self.bad_frames = 0            # 丢弃帧数（CRC 失败/解析失败）
         self.missed_images = 0         # 物理码未解出的图像帧数
+        self.valid_data_frames = 0     # 有效 DATA 帧数（不含 MANIFEST/END）
+        self.total_valid_bytes = 0     # 累计有效 DATA 帧承载字节（链路搬运量，速率基数）
+        self._samples: deque = deque()  # (monotonic_ts, bytes) 滑动窗口；工作线程 append、UI 线程 popleft
         if persist and resume_from is not None and resume_from.to_snapshot() is not None:
             session_store.save(self.session, save_dir)   # 恢复后立即落盘，固化种子
 
@@ -78,6 +90,91 @@ class ReceivePipeline:
         return max(0.0, time.monotonic() - self.first_valid_frame_ts)
 
     @property
+    def link_bps_avg(self) -> float:
+        """累计平均链路速率（字节/秒）：总有效字节 / 耗时。"""
+        e = self.elapsed_seconds
+        return self.total_valid_bytes / e if e > 0 else 0.0
+
+    @property
+    def effective_bps(self) -> float:
+        """有效速率（去重，字节/秒）：唯一符号 × 块大小 / 耗时。
+
+        与 link_bps（含重复扫到的同块 + 喷泉冗余符号）不同，只计去重后真正推进
+        进度的字节，故与 progress/ETA/完成时间自洽——这才是用户视角的「文件搬运速度」。
+        链路速率反映扫码吞吐（识别效率×帧率），有效速率反映传输进度，二者后期差距拉大。
+        """
+        m = self.session.manifest
+        unique = self.session.unique_symbols
+        e = self.elapsed_seconds
+        if m is None or unique <= 0 or e <= 0:
+            return 0.0
+        return unique * (1 << m.chunk_size_log) / e
+
+    @property
+    def fps_avg(self) -> float:
+        """累计平均有效 DATA 帧率。"""
+        e = self.elapsed_seconds
+        return self.valid_data_frames / e if e > 0 else 0.0
+
+    def _instant_window(self, window: float = 2.0) -> tuple[float, float]:
+        """近 window 秒滑动窗口的 (字节速率, 帧速率)。UI 线程调用：
+
+        清理过期样本（deque 支持工作线程 append、本线程 popleft 的并发），再求和。
+        样本不足时返回 (0.0, 0.0)，由调用方回退到均值。
+        """
+        now = time.monotonic()
+        cutoff = now - window
+        while self._samples and self._samples[0][0] < cutoff:
+            self._samples.popleft()
+        if not self._samples:
+            return 0.0, 0.0
+        oldest = self._samples[0][0]
+        span = max(1e-3, now - oldest)
+        total = sum(bs for _, bs in self._samples)
+        return total / span, len(self._samples) / span
+
+    @property
+    def link_bps_instant(self) -> float:
+        """瞬时链路速率（近 ~2s 滑动窗口）；样本不足时回退均值。"""
+        if len(self._samples) < 2:
+            return self.link_bps_avg
+        bps, _ = self._instant_window()
+        return bps
+
+    @property
+    def fps_instant(self) -> float:
+        """瞬时有效帧率；样本不足时回退均值。"""
+        if len(self._samples) < 2:
+            return self.fps_avg
+        _, fps = self._instant_window()
+        return fps
+
+    @property
+    def eta_seconds(self) -> float | None:
+        """预计剩余秒数：基于喷泉开销模型与唯一符号到达速率。
+
+        门槛——唯一符号 <3 或耗时 <1s 时返回 None（速率未稳定，估值无意义）。
+        overshoot（实际超出预期帧数）时按 decimen progress.ts 步进上修 target，
+        诚实反映「比名义开销更慢」，避免 ETA 装作精确。
+        """
+        unique = self.session.unique_symbols
+        elapsed = self.elapsed_seconds
+        if unique < 3 or elapsed < 1.0:
+            return None
+        K = self.session.K
+        if K <= 0:
+            return None
+        expected = max(K + 1, math.ceil(K * expected_overhead(K)))
+        redundancy = max(1, expected - K)
+        overshoot = unique - expected
+        target = (expected if overshoot < 0
+                  else expected + redundancy * (overshoot // redundancy + 1))
+        rate = unique / elapsed
+        if rate <= 0:
+            return None
+        return (target - unique) / rate
+
+    @property
     def is_complete(self) -> bool:
         return self.session.is_complete
 
@@ -95,6 +192,13 @@ class ReceivePipeline:
                 continue
             self.session.ingest(header, payload)
             added += 1
+            # 仅 DATA 帧承载链路字节（MANIFEST/END 占比极低不计入速率基数）；
+            # 字节数取 manifest 的 block_size，与 _on_data 的 xor_data 尺寸校验一致
+            if header.frame_type == FrameType.DATA and self.session.manifest is not None:
+                bs = 1 << self.session.manifest.chunk_size_log
+                self.total_valid_bytes += bs
+                self.valid_data_frames += 1
+                self._samples.append((time.monotonic(), bs))
         self.valid_frames += added
         if added > 0 and self.first_valid_frame_ts is None:
             self.first_valid_frame_ts = time.monotonic()

@@ -34,6 +34,8 @@ class ReceiveSession:
         self.manifest: ManifestPayload | None = None
         self._decoder: lt.LtDecoder | None = None
         self._ended: bool = False
+        self.unique_symbols = 0              # 已收的不同 symbol_id 数（ETA/速率基数）
+        self._seen_sids: set[int] = set()    # 去重：喷泉码 (session_id, symbol_id) 确定性映射
 
     # ── 状态查询 ──
     @property
@@ -95,10 +97,14 @@ class ReceiveSession:
         self.manifest = m
         self._decoder = lt.LtDecoder(m.total_chunks, block_size)
         self._ended = False
+        self._seen_sids = set()
+        self.unique_symbols = 0
 
     def _on_data(self, header: FrameHeader, payload: bytes) -> None:
         if self._decoder is None or self.manifest is None or header.session_id != self.session_id:
             return   # 未知会话的 DATA：忽略（MANIFEST 未到）
+        if header.symbol_id in self._seen_sids:
+            return   # 重复符号：喷泉码同 symbol_id 恒等映射，跳过避免冗余 peeling 消减
         d = DataPayload.unpack(payload)
         block_size = 1 << self.manifest.chunk_size_log
         if d.degree <= 0 or len(d.xor_data) != block_size:
@@ -108,6 +114,8 @@ class ReceiveSession:
         if any(i < 0 or i >= self.K for i in d.adjacency):
             raise ProtocolError("DATA adjacency 越界")
         self._decoder.add_symbol(d.adjacency, d.xor_data)
+        self._seen_sids.add(header.symbol_id)
+        self.unique_symbols += 1
 
     def _on_end(self, header: FrameHeader, payload: bytes) -> None:
         if self._decoder is None or header.session_id != self.session_id:

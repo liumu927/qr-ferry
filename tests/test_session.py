@@ -153,3 +153,32 @@ def test_snapshot_round_trip_resumes_and_completes():
 def test_snapshot_none_when_not_started():
     """会话未建立（MANIFEST 未到）时 to_snapshot 返回 None。"""
     assert ReceiveSession().to_snapshot() is None
+
+
+def test_duplicate_symbol_id_deduped():
+    """重复 symbol_id 不增 unique_symbols、不重复喂 decoder。"""
+    data = b"abcde" * 50
+    manifest, payloads, _, _ = _build_session_frames(data, 4, session_id=7)
+    sess = ReceiveSession()
+    sess.ingest(FrameHeader(FrameType.MANIFEST, session_id=7), manifest.pack())
+    sess.ingest(FrameHeader(FrameType.DATA, session_id=7, symbol_id=payloads[0][0]),
+                payloads[0][1].pack())
+    sess.ingest(FrameHeader(FrameType.DATA, session_id=7, symbol_id=payloads[1][0]),
+                payloads[1][1].pack())
+    assert sess.unique_symbols == 2
+    sess.ingest(FrameHeader(FrameType.DATA, session_id=7, symbol_id=payloads[0][0]),
+                payloads[0][1].pack())
+    assert sess.unique_symbols == 2
+
+
+def test_unique_symbols_reset_on_session_switch():
+    """切换会话（新 MANIFEST）重置 unique_symbols 与 seen。"""
+    data = b"x" * 200
+    m1, p1, _, _ = _build_session_frames(data, 4, session_id=1)
+    sess = ReceiveSession()
+    sess.ingest(FrameHeader(FrameType.MANIFEST, session_id=1), m1.pack())
+    sess.ingest(FrameHeader(FrameType.DATA, session_id=1, symbol_id=p1[0][0]), p1[0][1].pack())
+    assert sess.unique_symbols == 1
+    m2, _, _, _ = _build_session_frames(data, 4, session_id=2)
+    sess.ingest(FrameHeader(FrameType.MANIFEST, session_id=2), m2.pack())
+    assert sess.unique_symbols == 0

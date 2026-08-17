@@ -203,7 +203,7 @@ class MainActivity : AppCompatActivity() {
             if (selectedFile == null) filePickerLauncher.launch(arrayOf("*/*"))
         }
         binding.btnStartSend.setOnClickListener { toggleSending() }
-        showSendMode(false)
+        showSendMode(true)   // 默认进入发送页
         refreshSendTypeUi()
         refreshSendEnabled()
     }
@@ -230,6 +230,15 @@ class MainActivity : AppCompatActivity() {
         binding.sendMetaText.visibility = if (fileMode) View.GONE else View.VISIBLE
         binding.sendFileInfo.visibility = if (fileMode) View.VISIBLE else View.GONE
         binding.btnPickFile.isEnabled = !sending && fileMode
+        // 文本/文件切换时联动帧长/fps 默认（仅非发送中，避免覆盖用户手调）：
+        // 文本 700B/8fps、文件 2200B/8fps —— 实测稳定工作点
+        if (!sending) {
+            val defaultBytes = if (fileMode) 2200 else 700
+            binding.sendFrameBytesSpinner.setSelection(
+                FRAME_BYTES_OPTIONS.indexOf(defaultBytes).coerceAtLeast(0))
+            binding.sendFpsSpinner.setSelection(
+                FPS_OPTIONS.indexOf(DEFAULT_FPS).coerceAtLeast(0))
+        }
     }
 
     private fun toggleSending() {
@@ -488,21 +497,35 @@ class MainActivity : AppCompatActivity() {
             .addOnCompleteListener { imageProxy.close() }
     }
 
+    private fun formatEta(seconds: Double): String {
+        val s = maxOf(0L, seconds.toLong())
+        if (s < 60) return "${s}s"
+        val min = s / 60
+        val sec = s % 60
+        if (min < 60) return if (sec > 0) "${min}m${"%02d".format(sec)}s" else "${min}m"
+        val h = min / 60
+        val mm = min % 60
+        return if (mm > 0) "${h}h${"%02d".format(mm)}m" else "${h}h"
+    }
+
     private fun updateStatus() {
         val p = pipeline
         val m = p.manifest
         val pct = if (p.K > 0) (p.progress * 100).toInt() else 0
         val missing = p.missingIndices
         val missingStr = if (missing.size <= 20) missing.toString() else "[${missing.size} 块]"
-        val elapsed = if (p.elapsedSeconds > 0.0) " · 已用 %.1fs".format(p.elapsedSeconds) else ""
+        val etaStr = p.etaSeconds?.let { formatEta(it) } ?: "—"
         val head = if (m != null) {
-            "接收中… ${pct}% | 缺块 $missingStr\n" +
+            "接收中… ${pct}% | 缺块 $missingStr | ETA $etaStr\n" +
+                "速率 %.1f KB/s（均 %.1f） · %.1f fps\n".format(
+                    p.linkBpsInstant / 1024.0, p.linkBpsAvg / 1024.0, p.fpsInstant) +
                 "K=${p.K} content=${m.contentType} comp=${m.compression}\n"
         } else {
             "等待 MANIFEST…（先收到 MANIFEST 才开始）\n"
         }
         runOnUiThread {
-            setStatus(head + "识别 ${p.seenBarcodes} · 有效 ${p.validFrames} · 丢弃 ${p.badFrames}$elapsed")
+            setStatus(head + "识别 ${p.seenBarcodes} · 有效 ${p.validDataFrames} · 丢弃 ${p.badFrames}" +
+                " · 已用 %.1fs".format(p.elapsedSeconds))
         }
     }
 
@@ -578,7 +601,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "qr-ferry-recv"
         private val FPS_OPTIONS = listOf(5, 8, 10, 12, 15, 18, 20, 24, 30)
-        private const val DEFAULT_FPS = 12
+        private const val DEFAULT_FPS = 8
         private val FRAME_BYTES_OPTIONS = listOf(700, 1200, 2200)
     }
 

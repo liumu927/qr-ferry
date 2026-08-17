@@ -9,6 +9,7 @@ import os
 import queue
 import random
 import threading
+import time
 
 import cv2
 import numpy as np
@@ -33,6 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from qrferry import __version__
 from qrferry.app.camera_devices import open_camera, probe_available_cameras
 from qrferry.app.receive_pipeline import ReceivePipeline, safe_filename
 from qrferry.app.send_controller import (
@@ -47,10 +49,24 @@ from qrferry.core.session import ReceiveSession
 from qrferry.qr.backend import StandardQrBackend
 from qrferry.qr.color_matrix import ColorMatrixBackend
 
-# 解码降采样目标宽度：高拍仪等设备常无视 720p 请求仍输出 1080p，zxing 全图扫描成本
-# ~O(像素数)，1080p 解码慢于采集会堵满解码队列（maxsize=1）丢帧 → 有效帧率远低于采集。
-# 缩到 ≤此宽度后解码提速 ~2-3x；仅作用于解码路径，预览仍用原始帧。
-_DECODE_MAX_WIDTH = 720
+# 采集请求宽度，也是解码降采样的回退目标：单一真相源。
+# 1280×720 已被验证为「解码足够快、QR 模块像素充足」的健康工作点（修复前一直在此尺寸直解）。
+# 仅当设备无视请求、实际输出宽度超过此值（如高拍仪强出 1080p=1920 宽）时，才降回此宽度——
+# 1080p 全图扫描成本 ~O(像素数)，降回 1280 提速 ~2.25x，且像素仍够 zxing 解码。
+# 阈值不可低于采集请求宽度，否则会误伤所有遵循请求的摄像头（每帧无谓 resize + 模块缩水）。
+_CAPTURE_WIDTH = 1280
+
+
+def _format_eta(seconds: float) -> str:
+    """ETA 秒数 → 紧凑时长串（≤60s 显示秒，否则 m/s，再大 h/m）。"""
+    s = max(0, round(seconds))
+    if s < 60:
+        return f"{s}s"
+    m, sec = divmod(s, 60)
+    if m < 60:
+        return f"{m}m{sec:02d}s" if sec else f"{m}m"
+    h, m = divmod(m, 60)
+    return f"{h}h{m:02d}m" if m else f"{h}h"
 
 
 def _qimage_from_pil(img: Image.Image) -> QImage:
@@ -209,14 +225,22 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("qr-ferry · 光学二维码摆渡")
+        self.setWindowTitle(f"qr-ferry · 光学二维码摆渡 v{__version__}")
         self.setWindowIcon(_make_icon())
         self.resize(980, 680)
         self._backend = StandardQrBackend()
         self._send_ctrl: SendController | None = None
         self._send_iter = None
+        # 发送速率统计基线（_tick_send 懒初始化；_stop_send 重置）
+        self._send_start_ts: float | None = None
+        self._send_block_size = 0
+        self._sent_frames = 0
+        self._sent_bytes = 0
         self._send_timer = QTimer(self)
         self._send_timer.timeout.connect(self._tick_send)
+        # 接收统计定时刷新：无新帧时速率/ETA 仍按时间推移更新（滑动窗口左移、ETA 倒计时）
+        self._r_stats_timer = QTimer(self)
+        self._r_stats_timer.timeout.connect(self._update_r_stats)
         self._pipe: ReceivePipeline | None = None
         self._cap = None
         # 采集/解码均在工作线程，UI 不碰 cap：_capture_loop 负责 open+read+release，
@@ -465,9 +489,17 @@ class MainWindow(QMainWindow):
         self._r_missing.setWordWrap(True)
         self._r_missing.hide()
         lay.addWidget(self._r_missing)
-        # 链路统计：有效/丢弃/丢弃率/耗时，完成时追加吞吐量
-        self._r_stats = QLabel("")
-        self._r_stats.setStyleSheet("color:#64748B; font-size:12px;")
+        # 链路统计（单行双端）：左=有效/丢弃/未识别/已用，右=速率/fps/ETA
+        self._r_stats = QWidget()
+        stats_row = QHBoxLayout(self._r_stats)
+        stats_row.setContentsMargins(0, 0, 0, 0)
+        stats_row.setSpacing(12)
+        _stat_style = "color:#64748B; font-size:12px;"
+        self._r_stats_left = QLabel(""); self._r_stats_left.setStyleSheet(_stat_style)
+        self._r_stats_right = QLabel(""); self._r_stats_right.setStyleSheet(_stat_style)
+        stats_row.addWidget(self._r_stats_left)
+        stats_row.addStretch(1)
+        stats_row.addWidget(self._r_stats_right)
         self._r_stats.hide()
         lay.addWidget(self._r_stats)
         self._r_result = QTextEdit(); self._r_result.setReadOnly(True)
@@ -522,21 +554,27 @@ class MainWindow(QMainWindow):
         self._r_count.raise_()
 
     def _update_r_stats(self):
-        """刷新链路统计：有效/丢弃/丢弃率/耗时，完成时追加吞吐量。"""
+        """刷新链路统计（单行双端）：左=有效/丢弃/未识别/已用，右=速率/fps/ETA。"""
         if not hasattr(self, "_r_stats"):
             return
         pipe = self._pipe
         if pipe is None or pipe.session.manifest is None:
             self._r_stats.hide()
-            self._r_stats.setText("")
+            self._r_stats_left.setText("")
+            self._r_stats_right.setText("")
             return
         elapsed = max(1e-6, pipe.elapsed_seconds or 0.0)
-        text = (f"有效 {pipe.valid_frames} · 丢弃 {pipe.bad_frames} "
-                f"({pipe.drop_rate:.1%}) · 未识别 {pipe.missed_images} · 已用 {elapsed:.1f}s")
+        eff = pipe.effective_bps / 1024.0
+        eta = pipe.eta_seconds
+        eta_txt = "—" if eta is None else _format_eta(eta)
+        right = f"有效 {eff:.1f} KB/s | 帧率 {pipe.fps_instant:.1f} | 剩余 {eta_txt}"
         if pipe.is_complete and pipe.result is not None:
-            throughput = len(pipe.result.data) / elapsed / 1024.0
-            text += f" · {throughput:.1f} KB/s"
-        self._r_stats.setText(text)
+            end_to_end = len(pipe.result.data) / elapsed / 1024.0
+            right += f" | 完成 {end_to_end:.1f} KB/s"
+        left = (f"有效 {pipe.valid_data_frames} | 丢弃 {pipe.bad_frames} "
+                f"({pipe.drop_rate:.1%}) | 未识别 {pipe.missed_images} | 已用 {elapsed:.1f}s")
+        self._r_stats_left.setText(left)
+        self._r_stats_right.setText(right)
         self._r_stats.show()
 
     def _update_r_missing(self):
@@ -675,6 +713,7 @@ class MainWindow(QMainWindow):
         if self._s_start.isChecked():
             self._s_start.setChecked(False)
         self._s_start.setText("开始发送")
+        self._send_start_ts = None   # 重置速率统计，下次发送重新计时
 
     def _resend(self):
         """人工补发：从当前游标追加 N 个新 DATA 符号（LT 喷泉码靠新符号补缺块，非重发旧帧）。"""
@@ -714,6 +753,16 @@ class MainWindow(QMainWindow):
         # QR 是离散黑白模块矩阵，必须最近邻（Fast）保留方块锐利；双线性（Smooth）会在模块
         # 边缘产生灰色过渡，高密度帧（zip 满载）缩放后易致接收端 zxing 误读 → 重组数据损坏。
         self._qr_label.setPixmap(pix.scaled(self._qr_label.size(), Qt.KeepAspectRatio, Qt.FastTransformation))
+        # 发送速率统计（懒初始化：兼容 _start_send / _resume_send / _resend 三入口）
+        if self._send_start_ts is None:
+            self._send_start_ts = time.monotonic()
+            self._send_block_size = 1 << self._send_ctrl.config.chunk_size_log
+        self._sent_frames += cells
+        self._sent_bytes += cells * self._send_block_size
+        elapsed = max(1e-6, time.monotonic() - self._send_start_ts)
+        self.statusBar().showMessage(
+            f"发送中：K={self._send_ctrl.K} · {self._sent_bytes / elapsed / 1024:.1f} KB/s · "
+            f"{self._sent_frames / elapsed:.1f} fps · 已用 {elapsed:.1f}s")
 
     def _compose_grid(self, imgs):
         rows, cols = self._send_ctrl.config.grid
@@ -807,9 +856,11 @@ class MainWindow(QMainWindow):
             target=self._capture_loop, args=(idx,),
             name="recv-capture", daemon=True)
         self._capture_thread.start()
+        self._r_stats_timer.start(500)   # 500ms 刷新实时速率/ETA，无需新帧到达
         self.statusBar().showMessage("正在打开摄像头…")
 
     def _stop_recv(self):
+        self._r_stats_timer.stop()
         # 先停采集线程：置退出标记后短超时 join，cap 由 _capture_loop 退出时自行 release
         self._capture_stop.set()
         cthread = self._capture_thread
@@ -847,12 +898,12 @@ class MainWindow(QMainWindow):
                 image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             else:
                 image = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            # 解码前降采样（见 _DECODE_MAX_WIDTH 注释）：设备无视 720p 输出 1080p 时，
-            # 缩到 ≤720 宽再喂 zxing。INTER_AREA 缩小时做像素平均抗混叠，并抑制高频噪点，
-            # 对 zxing 的 LocalAverage 二值化更友好（识别率常不降反升）。预览不受影响。
-            if image.shape[1] > _DECODE_MAX_WIDTH:
-                h = round(image.shape[0] * _DECODE_MAX_WIDTH / image.shape[1])
-                image = cv2.resize(image, (_DECODE_MAX_WIDTH, h), interpolation=cv2.INTER_AREA)
+            # 解码前降采样：仅当设备无视采集请求、实际宽度超过 _CAPTURE_WIDTH 时（如高拍仪
+            # 强出 1080p），才降回请求宽度。遵循请求的普通摄像头已输出 1280 宽，此处条件不成立，
+            # 不做任何 resize——避免无谓缩放拖慢解码 + QR 模块缩水降低识别率。预览不受影响。
+            if image.shape[1] > _CAPTURE_WIDTH:
+                h = round(image.shape[0] * _CAPTURE_WIDTH / image.shape[1])
+                image = cv2.resize(image, (_CAPTURE_WIDTH, h), interpolation=cv2.INTER_AREA)
             try:
                 pipe.process_image(image)
             except ValueError as e:
@@ -895,16 +946,25 @@ class MainWindow(QMainWindow):
         # - 固定 720p：在细节清晰度与带宽之间取平衡。set() 失败（设备不支持）静默忽略。
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, _CAPTURE_WIDTH)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         # 60fps（设备支持时）：曝光随之缩短，降低相机曝光横跨屏幕两帧切换的
         # 时间混帧概率——基准仿真显示混帧是高帧率下的主要丢帧来源。
         cap.set(cv2.CAP_PROP_FPS, 60)
         self._cap = cap   # 标记 open 成功，供 _on_decode_progress / _on_decode_error 判"接收中"
+        read_fail = 0     # 连续 read 失败计数：甄别「isOpened 成功但永不出帧」的假可用设备
         while not self._capture_stop.is_set():
             ok, frame = cap.read()
             if not ok:
+                # 虚拟设备可能 isOpened 成功但 read 持续失败（MSMF 协商错误）。无限 continue 会
+                # 静默黑屏卡死；累计失败超阈值即报错，提示换设备/检查驱动后跳出，由尾部 release。
+                read_fail += 1
+                if read_fail >= 30:
+                    self._decode_error.emit(
+                        f"摄像头 {idx} 无法读取画面，设备可能未真正出帧，请改选其它设备或检查驱动")
+                    break
                 continue
+            read_fail = 0
             self._frame_ready.emit(frame)
             # 投递到"只保留最新一帧"的槽位：槽满说明解码慢，丢旧帧投新帧
             q = self._decode_queue

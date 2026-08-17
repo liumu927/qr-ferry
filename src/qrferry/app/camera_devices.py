@@ -95,7 +95,13 @@ def _probe_index(index: int) -> bool:
     except ModuleNotFoundError:
         return False
     try:
-        return bool(cap.isOpened())
+        if not cap.isOpened():
+            return False
+        # 必须实测 read 出帧：部分虚拟设备 isOpened() 成功但 read 永久失败
+        # （MSMF 协商错误），仅验 isOpened 会把这类「假可用」设备列入下拉框，
+        # 选中后 _capture_loop 静默黑屏卡死。read 一帧即可甄别。
+        ok, _ = cap.read()
+        return bool(ok)
     finally:
         cap.release()
 
