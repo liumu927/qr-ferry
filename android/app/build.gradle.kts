@@ -25,7 +25,7 @@ fun deriveVersionCode(name: String): Int {
 
 val releaseVersionName: String = (project.findProperty("versionName") as String?)
     ?: System.getenv("QR_FERRY_VERSION")?.takeIf { it.isNotBlank() }
-    ?: "0.1.10"
+    ?: "0.1.13"
 val releaseVersionCode: Int = deriveVersionCode(releaseVersionName)
 
 android {
