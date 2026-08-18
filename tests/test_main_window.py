@@ -189,15 +189,16 @@ def test_receive_stats_displays_valid_and_dropped(qapp):
     w._recv_start_ts = 0.0
     w._update_r_stats()
     text = w._r_stats_left.text()
-    assert "有效 50" in text
+    assert "已收 50" in text
     assert "丢弃 5" in text
     assert "9.1%" in text            # 5/55 ≈ 9.09% → :.1% = "9.1%"
     assert "未识别 12" in text
     assert not w._r_stats.isHidden()
 
 
-def test_receive_stats_shows_throughput_when_complete(qapp):
-    """完成时统计行追加吞吐量（KB/s）。"""
+def test_receive_stats_no_second_rate_when_complete(qapp):
+    """完成态不追加第二个 KB/s 速率：有效=去重搬运速率自洽（与 ETA/进度同口径），
+    避免与基于原始文件字节的端到端速率并列造成「哪个才是真速度」的误导。"""
     w = MainWindow()
     manifest = type("M", (), {"raw_size": 2048})()
     session = type("S", (), {"manifest": manifest})()
@@ -210,12 +211,13 @@ def test_receive_stats_shows_throughput_when_complete(qapp):
         "elapsed_seconds": 2.0,
         "link_bps_instant": 0.0, "link_bps_avg": 0.0,
         "fps_instant": 0.0, "eta_seconds": None,
-        "effective_bps": 0.0,
+        "effective_bps": 1024.0,
     })()
     w._recv_start_ts = 0.0
     w._update_r_stats()
-    assert "有效 100" in w._r_stats_left.text()
-    assert "KB/s" in w._r_stats_right.text()   # 完成时右侧显示吞吐量
+    assert "已收 100" in w._r_stats_left.text()
+    assert "完成" not in w._r_stats_right.text()      # 不再出现第二个速率
+    assert w._r_stats_right.text().count("KB/s") == 1  # 仅保留有效一个速率
 
 
 def test_received_file_waits_for_user_save(qapp):

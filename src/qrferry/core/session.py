@@ -63,19 +63,26 @@ class ReceiveSession:
         return self._decoder.missing_indices if self._decoder is not None else []
 
     # ── 帧路由 ──
-    def ingest(self, header: FrameHeader, payload: bytes) -> None:
-        """按 FRAME_TYPE 路由；未知会话或坏 payload 一律静默忽略。"""
+    def ingest(self, header: FrameHeader, payload: bytes) -> bool:
+        """按 FRAME_TYPE 路由；未知会话或坏 payload 一律静默忽略。
+
+        返回本帧是否"真正生效"（建会话/推进解码/触发收尾）。MANIFEST 未到时的
+        DATA、重复符号、未知会话帧、坏 payload 均返回 False——上层统计
+        （有效帧计数、首帧时间戳）不得把这些帧计入，否则中途加入流的接收
+        "已用"起始即非零（发送端 MANIFEST 间隔轮播，先到的 DATA 全部被忽略）。
+        """
         try:
             if header.frame_type == FrameType.MANIFEST:
-                self._on_manifest(header, payload)
+                return self._on_manifest(header, payload)
             elif header.frame_type == FrameType.DATA:
-                self._on_data(header, payload)
+                return self._on_data(header, payload)
             elif header.frame_type == FrameType.END:
-                self._on_end(header, payload)
+                return self._on_end(header, payload)
         except ProtocolError:
-            return   # 坏 payload：丢弃，不崩溃
+            return False   # 坏 payload：丢弃，不崩溃
+        return False
 
-    def _on_manifest(self, header: FrameHeader, payload: bytes) -> None:
+    def _on_manifest(self, header: FrameHeader, payload: bytes) -> bool:
         m = ManifestPayload.unpack(payload)
         if m.content_type not in (ContentType.FILE, ContentType.TEXT):
             raise ProtocolError("未知 content_type")
@@ -91,7 +98,7 @@ class ReceiveSession:
         if m.encoded_size > m.total_chunks * block_size:
             raise ProtocolError("encoded_size 超出分块容量")
         if self.started and self.session_id == header.session_id:
-            return   # 同会话重播，幂等忽略
+            return False   # 同会话重播，幂等忽略
         # 首次或切换会话：重建上下文
         self.session_id = header.session_id
         self.manifest = m
@@ -99,12 +106,13 @@ class ReceiveSession:
         self._ended = False
         self._seen_sids = set()
         self.unique_symbols = 0
+        return True
 
-    def _on_data(self, header: FrameHeader, payload: bytes) -> None:
+    def _on_data(self, header: FrameHeader, payload: bytes) -> bool:
         if self._decoder is None or self.manifest is None or header.session_id != self.session_id:
-            return   # 未知会话的 DATA：忽略（MANIFEST 未到）
+            return False   # 未知会话的 DATA：忽略（MANIFEST 未到）
         if header.symbol_id in self._seen_sids:
-            return   # 重复符号：喷泉码同 symbol_id 恒等映射，跳过避免冗余 peeling 消减
+            return False   # 重复符号：喷泉码同 symbol_id 恒等映射，跳过避免冗余 peeling 消减
         d = DataPayload.unpack(payload)
         block_size = 1 << self.manifest.chunk_size_log
         if d.degree <= 0 or len(d.xor_data) != block_size:
@@ -116,12 +124,14 @@ class ReceiveSession:
         self._decoder.add_symbol(d.adjacency, d.xor_data)
         self._seen_sids.add(header.symbol_id)
         self.unique_symbols += 1
+        return True
 
-    def _on_end(self, header: FrameHeader, payload: bytes) -> None:
+    def _on_end(self, header: FrameHeader, payload: bytes) -> bool:
         if self._decoder is None or header.session_id != self.session_id:
-            return
+            return False
         EndPayload.unpack(payload)   # 仅校验合法性
         self._ended = True
+        return True
 
     # ── 重组 ──
     def reassemble(self) -> bytes:

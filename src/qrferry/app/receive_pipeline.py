@@ -190,15 +190,17 @@ class ReceivePipeline:
             except ProtocolError:
                 self.bad_frames += 1   # CRC 失败/坏帧：丢弃但计数
                 continue
-            self.session.ingest(header, payload)
-            added += 1
-            # 仅 DATA 帧承载链路字节（MANIFEST/END 占比极低不计入速率基数）；
-            # 字节数取 manifest 的 block_size，与 _on_data 的 xor_data 尺寸校验一致
+            effective = self.session.ingest(header, payload)
+            # 链路统计（link_bps 样本）：CRC 通过且会话已建立的 DATA 帧都算搬运量，
+            # 含重复符号（重复也消耗带宽）——与 effective 无关，保持原语义。
             if header.frame_type == FrameType.DATA and self.session.manifest is not None:
                 bs = 1 << self.session.manifest.chunk_size_log
                 self.total_valid_bytes += bs
                 self.valid_data_frames += 1
                 self._samples.append((time.monotonic(), bs))
+            if not effective:
+                continue   # 未生效帧（MANIFEST 前的 DATA/重复符号/未知会话）：不计入会话统计
+            added += 1
         self.valid_frames += added
         if added > 0 and self.first_valid_frame_ts is None:
             self.first_valid_frame_ts = time.monotonic()

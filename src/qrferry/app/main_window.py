@@ -251,6 +251,11 @@ class MainWindow(QMainWindow):
         self._decode_queue: queue.Queue | None = None
         self._decode_stop = threading.Event()
         self._decode_thread: threading.Thread | None = None
+        # 接收代际令牌：_stop_recv 的 join 超时后（MSMF read 慢时常见）旧线程可能
+        # 尚未退出，新一轮 clear() 会让它"复活"，把旧队列残留帧喂进新 pipe——
+        # 首帧时间戳被提前打上，"已用"起始即非零；还可能弹旧会话的错误框。
+        # 每轮启停自增代数，线程闭包持有自己的代数，不匹配即静默退出且不再 emit。
+        self._recv_generation = 0
         self._decode_progress.connect(self._on_decode_progress)
         self._decode_error.connect(self._on_decode_error)
         self._camera_probe_done.connect(self._on_camera_probe_done)
@@ -489,7 +494,7 @@ class MainWindow(QMainWindow):
         self._r_missing.setWordWrap(True)
         self._r_missing.hide()
         lay.addWidget(self._r_missing)
-        # 链路统计（单行双端）：左=有效/丢弃/未识别/已用，右=速率/fps/ETA
+        # 链路统计（单行双端）：左=已收/丢弃/未识别/已用，右=速率/fps/ETA
         self._r_stats = QWidget()
         stats_row = QHBoxLayout(self._r_stats)
         stats_row.setContentsMargins(0, 0, 0, 0)
@@ -554,7 +559,7 @@ class MainWindow(QMainWindow):
         self._r_count.raise_()
 
     def _update_r_stats(self):
-        """刷新链路统计（单行双端）：左=有效/丢弃/未识别/已用，右=速率/fps/ETA。"""
+        """刷新链路统计（单行双端）：左=已收/丢弃/未识别/已用，右=速率/fps/ETA。"""
         if not hasattr(self, "_r_stats"):
             return
         pipe = self._pipe
@@ -568,10 +573,7 @@ class MainWindow(QMainWindow):
         eta = pipe.eta_seconds
         eta_txt = "—" if eta is None else _format_eta(eta)
         right = f"有效 {eff:.1f} KB/s | 帧率 {pipe.fps_instant:.1f} | 剩余 {eta_txt}"
-        if pipe.is_complete and pipe.result is not None:
-            end_to_end = len(pipe.result.data) / elapsed / 1024.0
-            right += f" | 完成 {end_to_end:.1f} KB/s"
-        left = (f"有效 {pipe.valid_data_frames} | 丢弃 {pipe.bad_frames} "
+        left = (f"已收 {pipe.valid_data_frames} | 丢弃 {pipe.bad_frames} "
                 f"({pipe.drop_rate:.1%}) | 未识别 {pipe.missed_images} | 已用 {elapsed:.1f}s")
         self._r_stats_left.setText(left)
         self._r_stats_right.setText(right)
@@ -638,6 +640,18 @@ class MainWindow(QMainWindow):
         else:
             self._stop_send()
 
+    def _reset_send_stats(self) -> None:
+        """清零发送速率统计，开始一个新的统计周期。
+
+        三个发送入口（_start_send / _resume_send / _resend）启动前统一调用：
+        _sent_frames/_sent_bytes 若不在此清零，会跨会话残留上次累计值，
+        首个 tick 用大累计数除以微小 elapsed 算出天文速率，多次发送后计时/速率错乱。
+        """
+        self._send_start_ts = None
+        self._send_block_size = 0
+        self._sent_frames = 0
+        self._sent_bytes = 0
+
     def _resume_send(self):
         """从上次中断处恢复发送（断点续传）。"""
         from qrferry.app import session_store
@@ -651,6 +665,7 @@ class MainWindow(QMainWindow):
         self._send_ctrl = ctrl
         self._backend = self._selected_backend(self._s_codec)
         self._send_iter = ctrl.infinite_frames()
+        self._reset_send_stats()
         self._s_start.setText("停止发送")
         self._s_start.setChecked(True)
         self._send_timer.start(int(1000 / self._s_fps.value()))
@@ -697,6 +712,7 @@ class MainWindow(QMainWindow):
             source_kind="file" if is_file else "text",
             source_path=self._file_path if is_file else None)
         self._send_iter = self._send_ctrl.infinite_frames()
+        self._reset_send_stats()
         self._s_start.setText("停止发送")
         self._send_timer.start(int(1000 / self._s_fps.value()))
         mode_desc = "持续流"
@@ -724,6 +740,7 @@ class MainWindow(QMainWindow):
         if n <= 0:
             return
         self._send_iter = self._send_ctrl.extra_data_frames(n)
+        self._reset_send_stats()
         self._s_start.setText("停止发送")
         self._s_start.setChecked(True)
         self._send_timer.start(int(1000 / self._s_fps.value()))
@@ -848,12 +865,14 @@ class MainWindow(QMainWindow):
         self._decode_queue = queue.Queue(maxsize=1)
         self._decode_stop.clear()
         self._capture_stop.clear()
+        self._recv_generation += 1
+        gen = self._recv_generation
         self._decode_thread = threading.Thread(
-            target=self._decode_loop, args=(self._decode_queue,),
+            target=self._decode_loop, args=(self._decode_queue, gen),
             name="recv-decode", daemon=True)
         self._decode_thread.start()
         self._capture_thread = threading.Thread(
-            target=self._capture_loop, args=(idx,),
+            target=self._capture_loop, args=(idx, gen),
             name="recv-capture", daemon=True)
         self._capture_thread.start()
         self._r_stats_timer.start(500)   # 500ms 刷新实时速率/ETA，无需新帧到达
@@ -880,16 +899,22 @@ class MainWindow(QMainWindow):
         self._r_start.setText("开始接收")
         self._cam_refresh_btn.setEnabled(True)
 
-    def _decode_loop(self, q: queue.Queue):
+    def _decode_loop(self, q: queue.Queue, gen: int):
         """后台解码线程：只取槽位里的最新帧，慢解码时旧帧自然丢弃（等价原先的降速语义）。
 
         ReceivePipeline 只在本线程访问；结果经 Signal 回 UI 线程。不碰 self._cap。
+        gen 为启动时的接收代际：停止超时残留的旧线程在此发现代际不匹配，
+        不会把旧帧喂进新 pipe（旧帧 timestamp 会污染新会话的已用/速率统计）。
         """
         while not self._decode_stop.is_set():
+            if gen != self._recv_generation:
+                return   # 本线程属旧代：新会话已启动，静默退出不 emit
             try:
                 frame = q.get(timeout=0.1)
             except queue.Empty:
                 continue
+            if gen != self._recv_generation:
+                return   # 取帧等待期间新会话已启动：丢弃该帧，本线程静默退出
             pipe = self._pipe
             if pipe is None:
                 continue
@@ -932,13 +957,16 @@ class MainWindow(QMainWindow):
         self._stop_recv()
         QMessageBox.warning(self, "错误", message)
 
-    def _capture_loop(self, idx: int):
+    def _capture_loop(self, idx: int, gen: int):
         """采集线程：open + 链路参数 + 循环 read。open/read/release 全在此线程，
         UI 经 _frame_ready 收帧刷新预览、经 _decode_queue 喂解码线程。失败经 _decode_error 报。
+        gen 为启动时的接收代际：停止超时残留的旧线程据此识别自己已过期，
+        不再向新会话投帧/报错（open 慢的旧线程弹错误框会打断新一轮接收）。
         """
         cap = open_camera(idx)
         if not cap.isOpened():
-            self._decode_error.emit(f"无法打开摄像头 {idx}")
+            if gen == self._recv_generation:
+                self._decode_error.emit(f"无法打开摄像头 {idx}")
             return
         # 链路调优（手机虚拟摄像头尤其关键）：
         # - MJPG 压缩：USB 虚拟摄像头默认 YUYV 未压缩，高分辨率带宽不足会严重掉帧 → 进度慢。
@@ -951,6 +979,9 @@ class MainWindow(QMainWindow):
         # 60fps（设备支持时）：曝光随之缩短，降低相机曝光横跨屏幕两帧切换的
         # 时间混帧概率——基准仿真显示混帧是高帧率下的主要丢帧来源。
         cap.set(cv2.CAP_PROP_FPS, 60)
+        if gen != self._recv_generation:
+            cap.release()   # open 期间新一轮已启动：本线程属旧代，静默释放退出
+            return
         self._cap = cap   # 标记 open 成功，供 _on_decode_progress / _on_decode_error 判"接收中"
         read_fail = 0     # 连续 read 失败计数：甄别「isOpened 成功但永不出帧」的假可用设备
         while not self._capture_stop.is_set():
@@ -960,11 +991,15 @@ class MainWindow(QMainWindow):
                 # 静默黑屏卡死；累计失败超阈值即报错，提示换设备/检查驱动后跳出，由尾部 release。
                 read_fail += 1
                 if read_fail >= 30:
-                    self._decode_error.emit(
-                        f"摄像头 {idx} 无法读取画面，设备可能未真正出帧，请改选其它设备或检查驱动")
+                    if gen == self._recv_generation:
+                        self._decode_error.emit(
+                            f"摄像头 {idx} 无法读取画面，设备可能未真正出帧，请改选其它设备或检查驱动")
                     break
                 continue
             read_fail = 0
+            # 旧代线程：release 后静默退出，不向新会话投帧/刷预览
+            if gen != self._recv_generation:
+                break
             self._frame_ready.emit(frame)
             # 投递到"只保留最新一帧"的槽位：槽满说明解码慢，丢旧帧投新帧
             q = self._decode_queue
@@ -979,7 +1014,8 @@ class MainWindow(QMainWindow):
                 except queue.Full:
                     pass
         cap.release()
-        self._cap = None
+        if gen == self._recv_generation:
+            self._cap = None   # 仅当前代线程允许清除活跃标记（旧代线程不得误清新会话的 cap）
 
     def _on_frame_ready(self, frame):
         """UI 线程：采集线程送来的最新帧，刷新预览（接收已停止时直接忽略）。"""

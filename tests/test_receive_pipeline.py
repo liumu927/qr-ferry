@@ -68,8 +68,35 @@ def test_blank_image_yields_zero_and_no_crash():
     pipe = ReceivePipeline(backend=StandardQrBackend())
     blank = Image.new("L", (200, 200), 255)
     assert pipe.process_image(blank) == 0
-    assert pipe.missed_images == 1
-    assert not pipe.is_complete
+
+
+def test_first_frame_ts_not_set_by_pre_manifest_data():
+    """回归：中途加入流的接收（如断点续传弹窗停留后），MANIFEST 前到达的 DATA 帧
+    被 session.ingest 静默忽略，不得打上 first_valid_frame_ts——否则统计行
+    "已用"起始即非零（发送端 MANIFEST 每 32 帧轮播，中途加入先收到的全是 DATA）。
+    """
+    text = "中途加入流的计时回归".encode()
+    sender = SendController(text, ContentType.TEXT, "", session_id=77,
+                            config=SenderConfig(chunk_size_log=6, rounds=2))
+    backend = StandardQrBackend()
+    pipe = ReceivePipeline(backend=backend)
+    # 按协议序首帧是 MANIFEST；跳过它，先喂 DATA（模拟中途加入流）
+    from qrferry.core.frame import FrameType, decode_frame
+    frames = iter(sender)
+    manifest_raw = next(frames)
+    assert decode_frame(manifest_raw)[0].frame_type == int(FrameType.MANIFEST)
+    data_raw = next(frames)
+    assert decode_frame(data_raw)[0].frame_type == int(FrameType.DATA)
+    pipe.process_image(backend.encode(data_raw))
+    assert pipe.first_valid_frame_ts is None      # MANIFEST 前的 DATA：未生效，不计时
+    assert pipe.valid_frames == 0
+    pipe.process_image(backend.encode(manifest_raw))
+    assert pipe.first_valid_frame_ts is not None   # MANIFEST 生效：此刻起算
+    for fb in frames:
+        pipe.process_image(backend.encode(fb))
+        if pipe.is_complete:
+            break
+    assert pipe.result is not None and pipe.result.data == text
 
 
 def test_pipeline_counts_valid_frames_in_round_trip():

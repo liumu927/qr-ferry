@@ -35,6 +35,11 @@ output/
 .agents/
 .claude/
 
+# 本地调试/参考产物（不入库）
+.playwright-mcp/
+_ref_decimen/
+_*.diff.txt
+
 # Android（android/ 子工程构建产物）
 **/build/
 local.properties
