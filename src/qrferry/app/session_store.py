@@ -66,11 +66,19 @@ def _sender_path(save_dir: str) -> str:
 
 
 def save_sender(ctrl: SendController, save_dir: str) -> None:
-    """持久化发送端快照；TEXT 模式同时把原始数据落 bin 以便重启还原。"""
+    """持久化发送端快照；TEXT 或已优化 FILE 同时把发送字节落盘以便重启还原。
+
+    - TEXT：原始文本字节落 `send_<sid>.bin`（发送数据即原始文本）；
+    - 已优化 FILE：优化后的字节落 `send_<sid>.opt`（发送数据即优化结果，
+      续传时直接复用，不再对原文件重复优化——优化器输出依赖 Pillow/zlib 版本，
+      二次优化可能产生不同字节导致 SHA 校验失败）。
+    """
     snap = ctrl.to_snapshot()
     os.makedirs(_state_dir(save_dir), exist_ok=True)
-    if snap.get("source_kind") == "text":
-        bin_path = os.path.join(_state_dir(save_dir), f"send_{snap['session_id']}.bin")
+    is_text = snap.get("source_kind") == "text"
+    if is_text or snap.get("optimized"):
+        ext = ".bin" if is_text else ".opt"
+        bin_path = os.path.join(_state_dir(save_dir), f"send_{snap['session_id']}{ext}")
         with open(bin_path, "wb") as f:
             f.write(ctrl.raw_data)
         snap["source_path"] = bin_path
@@ -92,13 +100,14 @@ def load_sender(save_dir: str) -> SendController | None:
 
 
 def clear_sender(save_dir: str) -> None:
-    """清理发送端快照与 TEXT bin（发送完成或放弃后续传时调用）。"""
+    """清理发送端快照与 TEXT/优化 sidecar（发送完成或放弃后续传时调用）。"""
     import glob
     try:
         os.remove(_sender_path(save_dir))
     except FileNotFoundError:
         pass
-    for p in glob.glob(os.path.join(_state_dir(save_dir), "send_*.bin")):
+    for p in glob.glob(os.path.join(_state_dir(save_dir), "send_*.bin")) + \
+             glob.glob(os.path.join(_state_dir(save_dir), "send_*.opt")):
         try:
             os.remove(p)
         except OSError:

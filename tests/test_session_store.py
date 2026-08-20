@@ -116,3 +116,26 @@ def test_clear_sender_removes_json_and_bin():
         assert session_store.load_sender(d) is not None
         session_store.clear_sender(d)
         assert session_store.load_sender(d) is None
+
+
+def test_save_load_sender_optimized_file_round_trip():
+    """优化 FILE 模式 sender 快照往返：优化字节落 .opt sidecar，load 重建保留 optimized 标记。"""
+    with tempfile.TemporaryDirectory() as d:
+        data = _rand(1500, 33)
+        ctrl = SendController(data, ContentType.FILE, "photo.jpg", session_id=6,
+                              config=SenderConfig(chunk_size_log=6, rounds=1),
+                              source_kind="file", source_path=None, optimized=True)
+        for _ in range(5):
+            ctrl.next_data_frame()
+        session_store.save_sender(ctrl, d)
+        # sidecar 是 .opt 且内容为发送字节（优化后数据）
+        state = os.path.join(d, ".qrferry")
+        sidecars = [f for f in os.listdir(state) if f.startswith("send_") and f.endswith(".opt")]
+        assert sidecars, "优化发送应落 .opt sidecar"
+        loaded = session_store.load_sender(d)
+        assert loaded is not None
+        assert loaded.session_id == 6
+        assert loaded.next_sid == 5
+        assert loaded.raw_data == data          # 重建数据 = 优化后字节
+        assert loaded._optimized is True        # 续传不重新优化
+        assert loaded.config.compression == ctrl.config.compression
