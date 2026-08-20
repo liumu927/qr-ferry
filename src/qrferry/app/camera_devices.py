@@ -1,8 +1,11 @@
 """按 OpenCV 实际索引枚举和打开摄像头设备。"""
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 
 __all__ = [
@@ -10,9 +13,14 @@ __all__ = [
     "list_camera_devices",
     "open_camera",
     "probe_available_cameras",
+    "probe_available_cameras_fresh",
     "query_camera_friendly_names",
     "resolve_camera_index",
 ]
+
+# 探测子进程逐索引×逐后端试开，慢设备（指纹/红外相机协商 3-5s）下 9 个索引
+# 可能到 30s+；超时只放弃子进程结果回退进程内探测，不阻塞刷新。
+_PROBE_SUBPROC_TIMEOUT = 90
 
 
 @dataclass(frozen=True)
@@ -21,6 +29,10 @@ class CameraDevice:
     name: str
     available: bool
     probed: bool = True
+    # 探测时实际可用的后端（"auto"/"msmf"/"dshow"）：采集打开时优先用同一后端。
+    # 热插拔场景下 MSMF 设备枚举可能陈旧（先开软件后插摄像头时刷新也找不到），
+    # 逐后端独立探测能兜住「MSMF 看不到但 DSHOW 看得到」的新设备。
+    backend: str = "auto"
 
     @property
     def label(self) -> str:
@@ -89,9 +101,9 @@ def open_camera(index: int, backend: str = "auto"):
     return cv2.VideoCapture()
 
 
-def _probe_index(index: int) -> bool:
+def _probe_index(index: int, backend: str = "auto") -> bool:
     try:
-        cap = open_camera(index)
+        cap = open_camera(index, backend=backend)
     except ModuleNotFoundError:
         return False
     try:
@@ -128,17 +140,102 @@ def query_camera_friendly_names() -> list[str]:
     return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
 
 
+def probe_available_cameras_fresh(max_index: int = 9) -> list[CameraDevice] | None:
+    """在全新子进程中探测：绕开 OpenCV 进程内陈旧的设备枚举缓存。
+
+    Windows 上 MSMF/DSHOW 的设备枚举在进程内有缓存——应用启动后才插入的
+    外接摄像头，主进程内重试再多次也可能永远「看不见」（社区通用解法就是
+    重启进程）。子进程每次都是全新枚举，天然免疫该缓存。
+
+    子进程命令行（frozen 即 exe 自身；源码运行时为 python + run_app.py）：
+        qr-ferry.exe --probe-cameras <max_index> <out_json_path>
+    结果写临时文件而非 stdout——`--windowed` 打包的进程没有控制台，
+    sys.stdout 为 None，stdout 回传不可靠。任何失败（找不到入口/超时/
+    非零退出/JSON 损坏）返回 None，由调用方回退进程内探测。
+    """
+    entry = _probe_entry_command()
+    if entry is None:
+        return None
+    fd, out_path = tempfile.mkstemp(suffix=".json", prefix="qrferry-probe-")
+    os.close(fd)
+    try:
+        try:
+            proc = subprocess.run(
+                [*entry, "--probe-cameras", str(max_index), out_path],
+                capture_output=True, timeout=_PROBE_SUBPROC_TIMEOUT, check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if proc.returncode != 0:
+            return None
+        try:
+            with open(out_path, encoding="utf-8") as fh:
+                rows = json.load(fh)
+            return [
+                CameraDevice(
+                    index=int(r["index"]), name=str(r["name"]),
+                    available=True, probed=True, backend=str(r.get("backend", "auto")))
+                for r in rows
+            ]
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+    finally:
+        try:
+            os.unlink(out_path)
+        except OSError:
+            pass
+
+
+def _probe_entry_command() -> list[str] | None:
+    """探测子进程的启动命令：frozen 为 exe 自身；源码为 python + run_app.py。"""
+    if getattr(sys, "frozen", False):
+        return [sys.executable]
+    # 源码运行：src/qrferry/app/camera_devices.py → 仓库根/scripts/run_app.py
+    run_app = os.path.normpath(os.path.join(
+        os.path.dirname(__file__), "..", "..", "..", "scripts", "run_app.py"))
+    if os.path.isfile(run_app):
+        return [sys.executable, run_app]
+    return None
+
+
+def _probe_cameras_main(argv: list[str]) -> int:
+    """`--probe-cameras` 子进程入口：探测并把 JSON 写到 argv 指定路径。"""
+    max_index = int(argv[1]) if len(argv) > 1 and argv[1].isdigit() else 9
+    out_path = argv[2] if len(argv) > 2 else None
+    devices = probe_available_cameras(max_index=max_index)
+    rows = [{"index": d.index, "name": d.name, "backend": d.backend} for d in devices]
+    payload = json.dumps(rows, ensure_ascii=False)
+    if out_path:
+        with open(out_path, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+    return 0
+
+
+def _is_probe_cameras_request(argv: list[str] | None = None) -> bool:
+    """判断当前进程是否以 `--probe-cameras` 探测模式启动（供入口早退）。"""
+    return "--probe-cameras" in (argv if argv is not None else sys.argv)
+
+
 def probe_available_cameras(max_index: int = 9) -> list[CameraDevice]:
-    """真实探测 0..max_index-1：逐个 open_camera 试开，只保留能打开的设备。
+    """真实探测 0..max_index-1：逐后端独立试开，只保留能开且能出帧的设备。
+
+    每个索引按 auto → msmf → dshow 依次独立判定（不是 open_camera 的"第一个
+    打开即停"）：MSMF 枚举陈旧时（先开软件后插摄像头）auto 可能命中一个
+    isOpened 成功但 read 失效的陈旧项，此时 DSHOW 仍能试到真实设备——避免
+    热插拔设备「点击刷新也找不到」。backend 记录实际可用的后端，供采集打开复用。
 
     名称优先用系统友好名（按枚举位置尽力对应），取不到时回退 "Camera N"。
     """
     names = query_camera_friendly_names()
     devices: list[CameraDevice] = []
     for index in range(max_index):
-        if _probe_index(index):
-            name = names[index] if index < len(names) else f"Camera {index}"
-            devices.append(CameraDevice(index=index, name=name, available=True))
+        for backend in ("auto", "msmf", "dshow"):
+            if _probe_index(index, backend):
+                name = names[index] if index < len(names) else f"Camera {index}"
+                devices.append(CameraDevice(
+                    index=index, name=name, available=True, backend=backend))
+                break
     return devices
 
 

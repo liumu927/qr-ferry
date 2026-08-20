@@ -1,3 +1,5 @@
+import json
+
 from qrferry.app import camera_devices
 
 
@@ -35,7 +37,7 @@ def test_probe_available_cameras_only_lists_openable(monkeypatch):
             pass
 
     monkeypatch.setattr(
-        camera_devices, "open_camera", lambda index: FakeCap(index in {0, 2}))
+        camera_devices, "open_camera", lambda index, backend="auto": FakeCap(index in {0, 2}))
     monkeypatch.setattr(
         camera_devices, "query_camera_friendly_names", lambda: ["Cam A"])
 
@@ -57,7 +59,7 @@ def test_probe_available_cameras_empty_when_none_openable(monkeypatch):
         def release(self):
             pass
 
-    monkeypatch.setattr(camera_devices, "open_camera", lambda index: FakeCap())
+    monkeypatch.setattr(camera_devices, "open_camera", lambda index, backend="auto": FakeCap())
     monkeypatch.setattr(camera_devices, "query_camera_friendly_names", list)
 
     assert camera_devices.probe_available_cameras(max_index=3) == []
@@ -76,7 +78,68 @@ def test_probe_filters_devices_that_open_but_never_yield(monkeypatch):
         def release(self):
             pass
 
-    monkeypatch.setattr(camera_devices, "open_camera", lambda index: FakeCap())
+    monkeypatch.setattr(camera_devices, "open_camera", lambda index, backend="auto": FakeCap())
     monkeypatch.setattr(camera_devices, "query_camera_friendly_names", list)
 
     assert camera_devices.probe_available_cameras(max_index=3) == []
+
+
+def test_probe_finds_dshow_device_when_msmf_stale(monkeypatch):
+    """热插拔：MSMF 枚举陈旧（auto/msmf 命中 isOpened 但 read 失效的陈旧项）时，
+    DSHOW 仍能找到真实设备——逐后端独立判定 + 记录 backend 供采集打开复用。"""
+
+    class StaleMsmf:
+        def isOpened(self):
+            return True
+
+        def read(self):
+            return (False, None)   # 陈旧项：能打开但永不出帧
+
+        def release(self):
+            pass
+
+    class WorkingDshow:
+        def isOpened(self):
+            return True
+
+        def read(self):
+            return (True, None)
+
+        def release(self):
+            pass
+
+    def open_camera(index, backend="auto"):
+        if backend == "dshow":
+            return WorkingDshow()
+        return StaleMsmf()
+
+    monkeypatch.setattr(camera_devices, "open_camera", open_camera)
+    monkeypatch.setattr(camera_devices, "query_camera_friendly_names", lambda: ["物理摄像头"])
+
+    devices = camera_devices.probe_available_cameras(max_index=2)
+
+    assert [d.index for d in devices] == [0, 1]
+    assert all(d.backend == "dshow" for d in devices), "应记录实际可用的后端 dshow"
+    assert devices[0].label == "0 · 物理摄像头 (可用)"
+
+
+def test_probe_subproc_main_writes_devices(tmp_path, monkeypatch):
+    """--probe-cameras 子进程入口：探测结果序列化为 JSON 写到指定路径。"""
+    out = tmp_path / "probe.json"
+
+    monkeypatch.setattr(
+        camera_devices, "probe_available_cameras",
+        lambda max_index=9: [
+            camera_devices.CameraDevice(3, "外接摄像头", True, backend="dshow"),
+        ])
+
+    camera_devices._probe_cameras_main(["--probe-cameras", "9", str(out)])
+    rows = json.loads(out.read_text(encoding="utf-8"))
+
+    assert rows == [{"index": 3, "name": "外接摄像头", "backend": "dshow"}]
+
+
+def test_is_probe_cameras_request():
+    assert camera_devices._is_probe_cameras_request(["run_app.py", "--probe-cameras", "9", "x"])
+    assert not camera_devices._is_probe_cameras_request(["run_app.py"])
+    assert not camera_devices._is_probe_cameras_request([])
