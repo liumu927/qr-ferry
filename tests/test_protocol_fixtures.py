@@ -6,8 +6,8 @@
 import hashlib
 import json
 import os
-import zlib
 
+from qrferry.app.compression import decompress
 from qrferry.core.frame import CRC_SIZE, HEADER_SIZE, MAGIC, VERSION, decode_frame
 from qrferry.core.session import ReceiveSession
 
@@ -45,5 +45,7 @@ def test_fixtures_round_trip_all_cases():
             if sess.is_complete:
                 break
         assert sess.is_complete, f"用例 {case['name']} 未能完成还原"
-        assert zlib.decompress(sess.reassemble()) == data, f"用例 {case['name']} 数据不一致"
+        encoded = sess.reassemble()
+        assert encoded.hex() == case["encoded_hex"], f"用例 {case['name']} 重组字节不一致"
+        assert decompress(case["compression"], encoded) == data, f"用例 {case['name']} 数据不一致"
         assert hashlib.sha256(data).hexdigest() == case["raw_sha256"]

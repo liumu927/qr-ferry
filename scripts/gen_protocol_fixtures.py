@@ -16,15 +16,21 @@ import json
 import os
 import random
 import sys
-import zlib
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from qrferry.app.send_controller import SendController, SenderConfig
 from qrferry.core.frame import (
-    CRC_SIZE, HEADER_SIZE, MAGIC, VERSION,
-    Compression, ContentType, FrameType, LtDistribution,
-    DataPayload, decode_frame,
+    CRC_SIZE,
+    HEADER_SIZE,
+    MAGIC,
+    VERSION,
+    Compression,
+    ContentType,
+    DataPayload,
+    FrameType,
+    LtDistribution,
+    decode_frame,
 )
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "..", "tests", "fixtures", "protocol")
@@ -52,8 +58,9 @@ def _protocol_meta() -> dict:
 
 
 def _build_case(name: str, data: bytes, content_type: int, filename: str,
-                session_id: int, chunk_size_log: int) -> dict:
-    cfg = SenderConfig(chunk_size_log=chunk_size_log, compression=int(Compression.ZLIB),
+                session_id: int, chunk_size_log: int,
+                compression: int = int(Compression.ZLIB)) -> dict:
+    cfg = SenderConfig(chunk_size_log=chunk_size_log, compression=compression,
                        lt_dist=int(LtDistribution.RSD), redundancy=2.0, rounds=1)
     ctrl = SendController(data, content_type, filename, session_id, cfg)
     manifest_hex = end_hex = None
@@ -77,7 +84,7 @@ def _build_case(name: str, data: bytes, content_type: int, filename: str,
         "name": name,
         "session_id": session_id,
         "content_type": int(content_type),
-        "compression": int(Compression.ZLIB),
+        "compression": int(compression),
         "lt_dist": int(LtDistribution.RSD),
         "chunk_size_log": chunk_size_log,
         "redundancy": cfg.redundancy,
@@ -89,6 +96,7 @@ def _build_case(name: str, data: bytes, content_type: int, filename: str,
         "input_hex": data.hex(),
         "input_text": data.decode("utf-8") if content_type == ContentType.TEXT else None,
         "filename": filename,
+        "encoded_hex": ctrl._encoded.hex(),   # 重组后（压缩态）字节，供 LT 层对照
         "manifest_frame_hex": manifest_hex,
         "end_frame_hex": end_hex,
         "data_symbols": symbols,
@@ -98,6 +106,7 @@ def _build_case(name: str, data: bytes, content_type: int, filename: str,
 
 def _verify(path: str) -> None:
     """回读 fixtures，逐用例 decode_frame + ReceiveSession 还原，断言数据一致。"""
+    from qrferry.app.compression import decompress
     from qrferry.core.session import ReceiveSession
     with open(path, encoding="utf-8") as f:
         fixture = json.load(f)
@@ -113,18 +122,28 @@ def _verify(path: str) -> None:
             if sess.is_complete:
                 break
         assert sess.is_complete, f"用例 {case['name']} 未能完成还原"
-        assert zlib.decompress(sess.reassemble()) == data, f"用例 {case['name']} 数据不一致"
+        encoded = sess.reassemble()
+        assert encoded.hex() == case["encoded_hex"], f"用例 {case['name']} 重组字节不一致"
+        assert decompress(case["compression"], encoded) == data, f"用例 {case['name']} 数据不一致"
         assert hashlib.sha256(data).hexdigest() == case["raw_sha256"]
 
 
 def main() -> None:
+    # 三种压缩形态各一例：ZLIB（文本）、ZSTD（高冗余文本）、NONE（不可压缩随机字节）
     cases = [
         _build_case("text_short", b"hello qr-ferry",
                     int(ContentType.TEXT), "", session_id=42, chunk_size_log=4),
-        _build_case("text_unicode", "你好，光学摆渡".encode("utf-8"),
+        _build_case("text_unicode", "你好，光学摆渡".encode(),
                     int(ContentType.TEXT), "", session_id=100, chunk_size_log=4),
         _build_case("file_binary", random.Random(1234).randbytes(3000),
                     int(ContentType.FILE), "f.bin", session_id=200, chunk_size_log=6),
+        _build_case("text_xml_zstd",
+                    (b"<item><name>qr-ferry</name><value>0123456789</value></item>\n" * 400),
+                    int(ContentType.TEXT), "", session_id=300, chunk_size_log=6,
+                    compression=int(Compression.ZSTD)),
+        _build_case("file_random_none", random.Random(99).randbytes(4096),
+                    int(ContentType.FILE), "random.bin", session_id=400, chunk_size_log=6,
+                    compression=int(Compression.NONE)),
     ]
     fixture = {
         "description": "qr-ferry 协议 v1.0 字节级黄金参考；跨语言实现须逐字节复现",

@@ -1,8 +1,8 @@
 package com.qrferry.receiver.core
 
 import com.qrferry.receiver.core.fixture.Fixtures
+import com.qrferry.receiver.core.fixture.decodeCompressed
 import com.qrferry.receiver.core.fixture.hexToBytes
-import com.qrferry.receiver.core.fixture.inflateZlib
 import com.qrferry.receiver.core.fixture.toHex
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -30,7 +30,7 @@ class LtDecoderTest {
                 pos += blk.size
             }
             val encoded = out.copyOfRange(0, c.encodedSize.toInt())
-            val raw = inflateZlib(encoded)
+            val raw = decodeCompressed(c.compression, encoded)
             assertEquals(c.inputHex, raw.toHex(), "解压数据不符(${c.name})")
         }
     }

@@ -1,8 +1,8 @@
 package com.qrferry.receiver.core
 
 import com.qrferry.receiver.core.fixture.Fixtures
+import com.qrferry.receiver.core.fixture.decodeCompressed
 import com.qrferry.receiver.core.fixture.hexToBytes
-import com.qrferry.receiver.core.fixture.inflateZlib
 import com.qrferry.receiver.core.fixture.toHex
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -28,7 +28,7 @@ class ReceiveSessionTest {
             }
             assertTrue(sess.isComplete, "未完成(${c.name})")
 
-            val raw = inflateZlib(sess.reassemble())
+            val raw = decodeCompressed(c.compression, sess.reassemble())
             assertEquals(c.inputHex, raw.toHex(), "数据不符(${c.name})")
 
             val sha = MessageDigest.getInstance("SHA-256").digest(raw)
@@ -61,7 +61,7 @@ class ReceiveSessionTest {
             sess.ingest(h, p)   // 重复喂入
         }
         assertTrue(sess.isComplete)
-        val raw = inflateZlib(sess.reassemble())
+        val raw = decodeCompressed(c.compression, sess.reassemble())
         assertEquals(c.inputHex, raw.toHex())
     }
 

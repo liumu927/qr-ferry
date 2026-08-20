@@ -1,8 +1,11 @@
 package com.qrferry.receiver.core.fixture
 
+import com.github.luben.zstd.ZstdInputStream
+import com.qrferry.receiver.core.Compression
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.util.zip.Inflater
 
@@ -31,6 +34,7 @@ data class Case(
     @SerialName("input_hex") val inputHex: String,
     @SerialName("input_text") val inputText: String? = null,
     val filename: String = "",
+    @SerialName("encoded_hex") val encodedHex: String? = null,
     @SerialName("manifest_frame_hex") val manifestFrameHex: String,
     @SerialName("end_frame_hex") val endFrameHex: String,
     @SerialName("data_symbols") val dataSymbols: List<Symbol>,
@@ -80,3 +84,19 @@ fun inflateZlib(data: ByteArray): ByteArray {
     inf.end()
     return out.toByteArray()
 }
+
+/** 解压标准 zstd 帧（Python zstandard / Zstd.compress 产出；zstd-jni 流式解压）。 */
+fun inflateZstd(data: ByteArray): ByteArray =
+    ZstdInputStream(ByteArrayInputStream(data)).use { it.readBytes() }
+
+/**
+ * 按 MANIFEST 的 compression 字段解压重组字节流。
+ * 与 PC 端 qrferry/app/compression.py: decompress 对齐（NONE 原样 / ZLIB / ZSTD）。
+ */
+fun decodeCompressed(compression: Int, encoded: ByteArray): ByteArray =
+    when (Compression.of(compression)) {
+        Compression.NONE -> encoded
+        Compression.ZLIB -> inflateZlib(encoded)
+        Compression.ZSTD -> inflateZstd(encoded)
+        null -> error("未知 compression=$compression")
+    }
