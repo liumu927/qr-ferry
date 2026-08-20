@@ -25,8 +25,16 @@ except (AttributeError, OSError):
 
 from qrferry.core import chunker, lt
 from qrferry.core.frame import (
-    Compression, ContentType, DataPayload, EndPayload, FrameHeader, FrameType,
-    LtDistribution, ManifestPayload, decode_frame, encode_frame,
+    Compression,
+    ContentType,
+    DataPayload,
+    EndPayload,
+    FrameHeader,
+    FrameType,
+    LtDistribution,
+    ManifestPayload,
+    decode_frame,
+    encode_frame,
 )
 from qrferry.core.session import ReceiveSession
 
@@ -94,7 +102,7 @@ def main() -> int:
     # 50KB 伪随机（不可压缩），用于真正触发多块 LT + peeling 解码
     big = random.Random(0xDEAD).getrandbits(50_000 * 8).to_bytes(50_000, "big")
     cases = [
-        ("文本(短)", "光学二维码摆渡传输系统 · 端到端验证。".encode("utf-8") * 30,
+        ("文本(短)", "光学二维码摆渡传输系统 · 端到端验证。".encode() * 30,
          ContentType.TEXT, "", 0x1111),
         ("文档(中)", b"qr-ferry protocol spec v1.0\n" * 200,
          ContentType.FILE, "spec.txt", 0x2222),

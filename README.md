@@ -13,7 +13,7 @@
 - **LT 喷泉码前向纠错**：系统化发送（先直发 K 个源块，再无限生成 RSD 随机组合符号），漏帧无需等下一轮循环到特定块，消除顺序轮询的补帧长尾。
 - 帧级 CRC32、文件级 SHA-256 双重校验；接收完成按 SHA-256 验证原始数据。
 - 单向链路友好：接收端无需回传协商，可容忍乱序、重复和部分丢帧。
-- 内容类型：文本与文件；自适应压缩分片（当前 `NONE` / `ZLIB`，`ZSTD` 预留）。
+- 内容类型：文本与文件；自适应压缩分片（`NONE` / `ZLIB` / `ZSTD`，best-of-3 自动选择）；发送端可对 PNG/OOXML/PDF 做格式优化再编码。
 
 **QR / 彩色码后端**
 - 标准 QR（默认）：`segno` 编码、`zxing-cpp` 解码，二进制安全、单帧多码识别。
@@ -28,7 +28,7 @@
 
 **Android 端（Kotlin / CameraX + ML Kit）**
 - **接收**：CameraX 预览 + 1080p ImageAnalysis，ML Kit 扫码驱动 `ReceivePipeline`；文件接收完成后由用户通过系统文件选择器自选保存路径与文件名。
-- **发送**：文本与文件均可发送；标准 QR（推荐）/ 彩色码（实验）切换；FPS 5~30 多档可调；帧长 700 / 1200 / 2200 B（源块档位随帧长联动 512 / 1024 / 2048 B）；纠错 L / M；帧生成与渲染在后台线程，主线程只贴图；发送时自动拉满屏幕亮度并保持唤醒。
+- **发送**：文本与文件均可发送；标准 QR（推荐）/ 彩色码（实验）切换；FPS 5~30 多档可调；帧长 700 / 1200 / 2200 B（源块档位随帧长联动 512 / 1024 / 2048 B）；纠错 L / M；帧生成与渲染在后台线程，主线程只贴图；发送时自动拉满屏幕亮度并保持唤醒；文件选择后自动做无损优化（OOXML 重打包），「允许有损优化」默认关闭，勾选后照片 PNG 转 JPEG 等（接收文件会不同）。
 - 链路诊断：状态栏实时显示识别 / 有效 / 丢弃计数、进度、缺块、耗时。
 - `protocol` 纯 JVM 库与 PC 端字节级对齐，含独立 golden 测试套件。
 
@@ -73,6 +73,8 @@ qr/
 ├── reed_solomon.py   # 分块 RS 纠错（彩色码用）
 └── color_matrix.py   # QFC1 彩色矩阵码（实验）
 app/
+├── compression.py        # 压缩编解码封装（zlib + zstd，自适应 best-of-3）
+├── file_optimizer.py     # 文件格式优化（PNG/OOXML/PDF 再编码，可选）
 ├── send_controller.py    # 发送端纯逻辑流水线
 ├── receive_pipeline.py   # 接收端纯逻辑流水线
 ├── session_store.py      # 断点续传持久化
@@ -106,7 +108,8 @@ app/
 - 帧序列：`MANIFEST → DATA* → END`，MANIFEST 周期重发以便接收端随时加入。
 - LT 喷泉码（协议 §6）：系统化发送——前 K 个符号 `degree=1` 直发源块（无丢包时一轮即完成），之后按 RSD 度分布无限生成随机组合符号；接收端收齐略多于 K 个“任意”符号即可 peeling 解码恢复。`degree / adjacency` 在 DATA 帧中显式传输，解码端无需 PRNG 协商。
 - 校验：每帧 CRC32，整文件 SHA-256；坏帧（CRC 失败 / MAGIC 不符 / 解析异常）静默丢弃，绝不崩溃。
-- 压缩：当前 `NONE` / `ZLIB`；`ZSTD` 预留。
+- 压缩：`NONE` / `ZLIB` / `ZSTD`（zstd 级别 9，PC `zstandard` ↔ Android `zstd-jni` 互解）。发送端默认自适应取三者中压缩后最小者——文本/XML 自动 ZLIB/ZSTD，已压缩内容（PNG/DOCX/PDF）自动回退 NONE 直发。
+- 文件优化（PC / Android 发送端，自动）：通用压缩对 PNG/DOCX/PDF 等已压缩容器无效，发送端自动做**无损**再编码——OOXML（docx/xlsx/pptx）zip 重打包、PDF 流重压缩（PC 端 pikepdf），接收端解包后内容与原件一致；**有损**转码（照片 PNG 转 JPEG、降位、OOXML 内嵌图片压缩）默认关闭，需显式勾选且会改变接收到的文件内容/格式（Android 端 PDF 优化暂不支持）。
 - 跨语言一致：`tests/fixtures/protocol/protocol_v1.json` 为字节级黄金参考，Android 端 `Fixtures.kt` 逐字段对照，保证 PC ↔ Android 互通。
 
 ## 快速开始
