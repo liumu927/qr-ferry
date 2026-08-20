@@ -3,6 +3,7 @@ import random
 import zlib
 
 import pytest
+import zstandard
 
 from qrferry.app.send_controller import (
     SendController,
@@ -21,6 +22,10 @@ from qrferry.core.session import ReceiveSession
 
 def _rand(n: int, seed: int) -> bytes:
     return random.Random(seed).getrandbits(n * 8).to_bytes(n, "big")
+
+
+def zstd_decompress(data: bytes) -> bytes:
+    return zstandard.ZstdDecompressor().decompress(data)
 
 
 def test_stream_fully_received_and_reassembled():
@@ -79,12 +84,38 @@ def test_explicit_chunk_size_overrides_auto_profile():
     assert ctrl.config.chunk_size_log == 6
 
 
-def test_auto_compression_uses_zlib_only_when_smaller():
+def test_auto_compression_uses_compression_only_when_smaller():
+    """自适应：冗余数据自动压缩（best-of NONE/ZLIB/ZSTD），随机二进制回退 NONE。"""
     compressed = SendController(b"a" * 10_000, ContentType.FILE, "a.bin", session_id=1)
     raw = SendController(_rand(10_000, 19), ContentType.FILE, "random.bin", session_id=2)
 
-    assert compressed.config.compression == int(Compression.ZLIB)
+    assert compressed.config.compression != int(Compression.NONE)
+    assert compressed.config.compression in (int(Compression.ZLIB), int(Compression.ZSTD))
     assert raw.config.compression == int(Compression.NONE)
+
+
+def test_auto_compression_zstd_wins_over_zlib_on_redundant_text():
+    """高冗余文本：zstd 比 zlib 更小，自动模式应选 ZSTD。"""
+    xml = (b"<item><name>qr-ferry</name><value>0123456789</value></item>\n" * 400)
+    ctrl = SendController(xml, ContentType.FILE, "data.xml", session_id=7)
+    assert ctrl.config.compression == int(Compression.ZSTD)
+    assert zstd_decompress(ctrl._encoded) == xml
+
+
+def test_explicit_zstd_round_trip():
+    """显式 ZSTD 编码 → 接收会话重组 → 解压还原。"""
+    data = (b"hello qr-ferry " * 30)
+    ctrl = SendController(data, ContentType.TEXT, "", session_id=11,
+                          config=SenderConfig(chunk_size_log=4, compression=int(Compression.ZSTD)))
+    assert ctrl.config.compression == int(Compression.ZSTD)
+    sess = ReceiveSession()
+    for fb in ctrl:
+        h, p = decode_frame(fb)
+        sess.ingest(h, p)
+        if sess.is_complete:
+            break
+    assert sess.is_complete
+    assert zstd_decompress(sess.reassemble()) == data
 
 
 def test_infinite_frames_manifests_burst_at_start():
@@ -288,6 +319,23 @@ def test_sender_snapshot_rejects_changed_file(tmp_path):
     path.write_bytes(b"tampered content")
     with pytest.raises(ValueError):
         SendController.from_snapshot(snap)
+
+
+def test_sender_snapshot_optimized_file_round_trip(tmp_path):
+    """优化 FILE 模式：source_path 指向优化字节文件，snapshot 重建保留 optimized 标记与游标。"""
+    data = _rand(2000, 66)
+    path = tmp_path / "photo.jpg"          # 模拟优化器产出的字节（此处直接用原始字节）
+    path.write_bytes(data)
+    ctrl = SendController(data, ContentType.FILE, "photo.jpg", session_id=21,
+                          config=SenderConfig(chunk_size_log=6, rounds=1),
+                          source_kind="file", source_path=str(path), optimized=True)
+    for _ in range(6):
+        ctrl.next_data_frame()
+    ctrl2 = SendController.from_snapshot(ctrl.to_snapshot())
+    assert ctrl2._optimized is True
+    assert ctrl2.next_sid == 6
+    assert ctrl2.raw_data == data
+    assert ctrl2.filename == "photo.jpg"
 
 
 def test_chunk_size_log_for_frame_bytes():

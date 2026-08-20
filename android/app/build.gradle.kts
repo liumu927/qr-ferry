@@ -25,7 +25,7 @@ fun deriveVersionCode(name: String): Int {
 
 val releaseVersionName: String = (project.findProperty("versionName") as String?)
     ?: System.getenv("QR_FERRY_VERSION")?.takeIf { it.isNotBlank() }
-    ?: "0.1.15"
+    ?: "0.1.18"
 val releaseVersionCode: Int = deriveVersionCode(releaseVersionName)
 
 android {
@@ -73,6 +73,7 @@ android {
     }
     buildFeatures {
         viewBinding = true
+        buildConfig = true   // 副标题显示 BuildConfig.VERSION_NAME
     }
 }
 
@@ -95,4 +96,9 @@ dependencies {
     implementation(libs.mlkit.barcode.scanning)
     // QR 编码（Android 发送端）
     implementation(libs.zxing.core)
+    // ZSTD 压缩（发送端 best-of-3 与接收端 ZSTD 解压；AAR 含 arm64-v8a/armeabi-v7a/x86/x86_64）
+    implementation(libs.zstd.jni)
+
+    // 本地单元测试：仅覆盖 FileOptimizer 纯 JVM 路径（zip 嗅探/重打包）；Bitmap 路径真机验证。
+    testImplementation("junit:junit:4.13.2")
 }

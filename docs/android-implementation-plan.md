@@ -9,7 +9,7 @@
 - **只做接收端**。发送端仍由 PC（Python）承担；Android 是被动接收方。
 - 单向光学链路：Android **无需回传**任何数据给发送端。
 - 协议字节级冻结（v1.0）：实现必须复现 fixtures，不得"优化"或改协议。
-- 当前 Python 端已实现：`MANIFEST/DATA/END`、CRC32、SHA-256、LT（RSD/ISD/DEGENERATE）、`Compression.NONE/ZLIB`。预留未实现：`FEEDBACK`、`CIMBAR`、`Compression.ZSTD`——Android 端**无需**实现这些。
+- 当前 Python 端已实现：`MANIFEST/DATA/END`、CRC32、SHA-256、LT（RSD/ISD/DEGENERATE）、`Compression.NONE/ZLIB/ZSTD`（zstd 由 `zstandard` 提供）。预留未实现：`FEEDBACK`、`CIMBAR`——Android 端无需实现这些；`Compression.ZSTD` 已实现（app 层 `zstd-jni`，见 §解压）。
 
 ## 2. 前置条件
 
@@ -107,7 +107,7 @@ xor_data        : 剩余字节，长度 = block_size（= 1 << chunk_size_log）
 
 1. 取 `resolved` 的 K 个块拼接。
 2. 截断到 `encoded_size`（最后一块可能不足 block_size，或 encoded 不是 block 整数倍）。
-3. 解压：`compression==ZLIB` 用 `java.util.zip.Inflater`；`NONE` 直接用。
+3. 解压按 `compression` 分派：`ZLIB` 用 `java.util.zip.Inflater`；`NONE` 直接用；`ZSTD` 用 `com.github.luben:zstd-jni`（`ZstdInputStream`，标准 zstd 帧，与 Python `zstandard` 互解；app 层依赖，协议层保持零依赖）。
 4. `SHA-256(重组数据) == manifest.raw_sha256` 校验。
 5. FILE：落盘（文件名经 `safe_filename` 规整）；TEXT：解码 UTF-8 显示。
 

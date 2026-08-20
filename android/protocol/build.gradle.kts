@@ -16,6 +16,8 @@ dependencies {
     // kotlinx-serialization 仅测试用（解析 fixtures）；主协议代码零第三方依赖。
     testImplementation(libs.kotlinx.serialization.json)
     testImplementation(libs.junit.jupiter)
+    // zstd-jni 仅测试用（fixtures 的 ZSTD 用例解压）；JVM 解析 .jar 产物。
+    testImplementation(libs.zstd.jni)
     testRuntimeOnly(libs.junit.platform.launcher)
 }
 

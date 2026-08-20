@@ -57,6 +57,21 @@ def test_pipeline_supports_uncompressed_payload():
     assert pipe.result.data == text
 
 
+def test_pipeline_zstd_payload_round_trip():
+    """ZSTD 压缩的载荷经流水线重组解压后还原，且结果携带压缩信息。"""
+    data = (b"<item><name>qr-ferry</name><value>0123456789</value></item>\n" * 200)
+    sender = SendController(data, ContentType.FILE, "data.xml", session_id=9,
+                            config=SenderConfig(chunk_size_log=6, rounds=1,
+                                                compression=2))  # Compression.ZSTD
+    pipe = ReceivePipeline(backend=StandardQrBackend())
+    _drive(sender, pipe)
+    assert pipe.result is not None
+    assert pipe.result.data == data
+    assert pipe.result.compression == 2
+    assert pipe.result.raw_size == len(data)
+    assert pipe.result.encoded_size < len(data)
+
+
 def test_safe_filename_strips_traversal():
     assert safe_filename("../../etc/passwd") == "passwd"
     assert safe_filename("a/b\\c.txt") == "c.txt"
@@ -155,8 +170,9 @@ def test_pipeline_counts_link_bytes_and_rate():
     assert pipe.valid_data_frames > 0
     assert pipe.link_bps_avg > 0
     assert pipe.fps_avg > 0
-    # 有效速率（去重，唯一符号×块大小/耗时）：> 0；喷泉冗余/重复使唯一符号数
-    # ≤ 承载字节的有效帧数，故 effective ≤ link 数学上恒成立。
+    # 有效速率（按原始文件字节计，raw_size×进度/耗时）：> 0；随机字节不可压缩
+    # raw≈encoded，且 resolved ≤ valid_data_frames，故 effective ≤ link 仍成立
+    # （可压缩数据下 effective 反映原始字节、可能超过链路字节，属预期）。
     assert pipe.effective_bps > 0
     # 计数层做精确断言（每个唯一符号必对应一次有效帧递增，不受时间影响）。
     assert pipe.session.unique_symbols <= pipe.valid_data_frames

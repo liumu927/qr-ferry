@@ -1,5 +1,6 @@
 package com.qrferry.receiver.send
 
+import com.github.luben.zstd.Zstd
 import com.qrferry.receiver.core.Compression
 import com.qrferry.receiver.core.ContentType
 import com.qrferry.receiver.core.DataPayload
@@ -16,6 +17,7 @@ import java.util.zip.Deflater
 /**
  * Android 发送端：自适应压缩 -> 分块 -> MANIFEST 周期重发 + LT 系统化喷泉流。
  * DATA 符号由 LtEncoder 生成：前 K 个直发源块，之后无限 RSD 随机组合符号。
+ * 压缩取 best-of {NONE, ZLIB, ZSTD}：试 zlib 与 zstd，仅当压缩后更小时才用（与 PC 端 compress_auto 一致）。
  */
 class TextSendController private constructor(
     private val raw: ByteArray,
@@ -26,9 +28,9 @@ class TextSendController private constructor(
     private val manifestInterval: Int = DEFAULT_MANIFEST_INTERVAL,
     maxFrameBytes: Int = LtEncoder.DEFAULT_MAX_FRAME_BYTES,
 ) {
-    private val compressed = deflate(raw)
-    private val compression = if (compressed.size < raw.size) Compression.ZLIB else Compression.NONE
-    private val encoded = if (compression == Compression.ZLIB) compressed else raw
+    private val codec = pickCompression(raw)          // (compression, encoded) —— 类属性不可解构
+    private val compression: Compression = codec.first
+    private val encoded: ByteArray = codec.second
     private val blockSize = 1 shl chunkSizeLog
     private val blocks = splitBlocks(encoded, blockSize)
     private val sha = MessageDigest.getInstance("SHA-256").digest(raw)
@@ -149,6 +151,20 @@ class TextSendController private constructor(
                 offset += n
             }
             return out
+        }
+
+        /**
+         * 自适应压缩：best-of {NONE, ZLIB, ZSTD}，取压缩后最小者；等大取靠前枚举（确定性）。
+         * 与 PC 端 qrferry/app/compression.py: compress_auto 对齐。zstd 级别 9 与 PC 一致。
+         * 捕获 Throwable（含 OOM）：大文件压缩失败时退化为 NONE 直发，绝不闪退。
+         */
+        private fun pickCompression(data: ByteArray): Pair<Compression, ByteArray> {
+            val candidates = mutableListOf(Compression.NONE to data)
+            val zlibed = try { deflate(data) } catch (t: Throwable) { null }
+            if (zlibed != null) candidates.add(Compression.ZLIB to zlibed)
+            val zstded = try { Zstd.compress(data, 9) } catch (t: Throwable) { null }
+            if (zstded != null) candidates.add(Compression.ZSTD to zstded)
+            return candidates.minBy { it.second.size }
         }
 
         private fun deflate(data: ByteArray): ByteArray {

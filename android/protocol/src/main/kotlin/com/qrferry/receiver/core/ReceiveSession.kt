@@ -46,7 +46,8 @@ class ReceiveSession {
     private fun onManifest(header: FrameHeader, payload: ByteArray) {
         val m = ManifestPayload.unpack(payload)
         if (ContentType.of(m.contentType) == null) throw ProtocolError("未知 content_type")
-        if (m.compression != Compression.NONE.value && m.compression != Compression.ZLIB.value)
+        if (m.compression != Compression.NONE.value && m.compression != Compression.ZLIB.value
+            && m.compression != Compression.ZSTD.value)
             throw ProtocolError("未知或暂不支持 compression")
         if (LtDistribution.of(m.ltDist) == null) throw ProtocolError("未知 lt_dist")
         if (m.totalChunks <= 0) throw ProtocolError("total_chunks 必须为正")

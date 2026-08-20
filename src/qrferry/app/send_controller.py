@@ -7,13 +7,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import zlib
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 
+from qrferry.app.compression import compress, compress_auto
 from qrferry.core import chunker, lt
 from qrferry.core.frame import (
-    Compression,
     DataPayload,
     EndPayload,
     FrameHeader,
@@ -98,7 +97,8 @@ class SendController:
 
     def __init__(self, data: bytes, content_type: int, filename: str,
                  session_id: int, config: SenderConfig | None = None,
-                 source_kind: str | None = None, source_path: str | None = None):
+                 source_kind: str | None = None, source_path: str | None = None,
+                 optimized: bool = False):
         if not data:
             raise ValueError("发送数据不能为空")
         self.config = config or SenderConfig()
@@ -109,23 +109,14 @@ class SendController:
         self._raw_data = data             # 原始数据引用，供 TEXT 模式续传持久化
         self._source_kind = source_kind   # "file" | "text" | None
         self._source_path = source_path   # FILE: 原文件路径；TEXT: 由 store 落 bin 后回填
+        self._optimized = optimized       # FILE: 发送前是否已做格式优化（PNG/OOXML/PDF）
 
         compression = self.config.compression
         if compression is None:
-            compressed = zlib.compress(data, 9)
-            if len(compressed) < len(data):
-                compression = int(Compression.ZLIB)
-                self._encoded = compressed
-            else:
-                compression = int(Compression.NONE)
-                self._encoded = data
+            compression, self._encoded = compress_auto(data)
             self.config = replace(self.config, compression=compression)
-        elif compression == int(Compression.NONE):
-            self._encoded = data
-        elif compression == int(Compression.ZLIB):
-            self._encoded = zlib.compress(data, 9)
         else:
-            raise ValueError(f"暂不支持的压缩类型: {compression}")
+            self._encoded = compress(data, compression)
         chunk_size_log = self.config.chunk_size_log
         if chunk_size_log is None:
             chunk_size_log = recommend_chunk_size_log(len(self._encoded), self.config.grid)
@@ -253,6 +244,21 @@ class SendController:
         """原始发送数据（供 TEXT 模式断点续传持久化）。"""
         return self._raw_data
 
+    @property
+    def source_kind(self) -> str | None:
+        """数据来源："file" | "text" | None（UI 断点续传探测用）。"""
+        return self._source_kind
+
+    @property
+    def source_path(self) -> str | None:
+        """数据来源路径：普通 FILE 为原文件路径，优化 FILE / TEXT 为 .opt/.bin sidecar。"""
+        return self._source_path
+
+    @property
+    def optimized(self) -> bool:
+        """FILE 发送前是否已做格式优化（快照数据为优化产物，无法与源文件直接比对）。"""
+        return self._optimized
+
     # ── 断点续传 ──
     def to_snapshot(self) -> dict:
         """导出可 JSON 序列化的发送端快照。"""
@@ -275,6 +281,7 @@ class SendController:
             "next_sid": self._next_sid,
             "source_kind": self._source_kind,
             "source_path": self._source_path,
+            "optimized": self._optimized,
             "raw_sha_b64": base64.b64encode(self._sha).decode("ascii"),
         }
 
@@ -306,6 +313,7 @@ class SendController:
         if kind == "file" and hashlib.sha256(data).digest() != base64.b64decode(snap["raw_sha_b64"]):
             raise ValueError(f"文件 {path} 自上次发送后已变更，无法续传")
         ctrl = cls(data, snap["content_type"], snap["filename"], snap["session_id"], cfg,
-                   source_kind=kind, source_path=path)
+                   source_kind=kind, source_path=path,
+                   optimized=bool(snap.get("optimized", False)))
         ctrl._next_sid = snap["next_sid"]
         return ctrl

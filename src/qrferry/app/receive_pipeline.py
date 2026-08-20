@@ -10,13 +10,12 @@ import hashlib
 import math
 import os
 import time
-import zlib
 from collections import deque
 from dataclasses import dataclass
 
 from qrferry.app import session_store
+from qrferry.app.compression import decompress
 from qrferry.core.frame import (
-    Compression,
     ContentType,
     FrameType,
     ProtocolError,
@@ -34,6 +33,9 @@ class ReceiveResult:
     content_type: int
     filename: str
     data: bytes
+    compression: int = 0      # Manifest 的 compression 字段（NONE=0/ZLIB=1/ZSTD=2）
+    raw_size: int = 0         # 原始（解压后）字节数
+    encoded_size: int = 0     # 压缩后（实际传输）字节数
 
 
 def safe_filename(name: str) -> str:
@@ -66,6 +68,11 @@ class ReceivePipeline:
         self.valid_data_frames = 0     # 有效 DATA 帧数（不含 MANIFEST/END）
         self.total_valid_bytes = 0     # 累计有效 DATA 帧承载字节（链路搬运量，速率基数）
         self._samples: deque = deque()  # (monotonic_ts, bytes) 滑动窗口；工作线程 append、UI 线程 popleft
+        # 速率增量基准：断点续传的 decoder 带已恢复种子，effective_bps 只计
+        # 本次会话新增解出的源块，避免把历史进度算进当前速率（续传首屏虚高）。
+        self._start_resolved = self.session._decoder.resolved_count \
+            if self.session._decoder is not None else 0
+        self._last_decoder = self.session._decoder
         if persist and resume_from is not None and resume_from.to_snapshot() is not None:
             session_store.save(self.session, save_dir)   # 恢复后立即落盘，固化种子
 
@@ -97,18 +104,33 @@ class ReceivePipeline:
 
     @property
     def effective_bps(self) -> float:
-        """有效速率（去重，字节/秒）：唯一符号 × 块大小 / 耗时。
+        """有效速率（字节/秒）：按原始文件字节计，= raw_size × 新增解出块 / K / 耗时。
 
-        与 link_bps（含重复扫到的同块 + 喷泉冗余符号）不同，只计去重后真正推进
-        进度的字节，故与 progress/ETA/完成时间自洽——这才是用户视角的「文件搬运速度」。
-        链路速率反映扫码吞吐（识别效率×帧率），有效速率反映传输进度，二者后期差距拉大。
+        与用户直觉的「文件搬运速度」（原始文件大小 ÷ 总耗时）一致：
+        - 完成时 = raw_size / elapsed，即端到端真实搬运速率；
+        - 压缩收益自然体现：encoded < raw 时同样块数搬运更多原始字节，
+          速率不会因压缩「缩水」（旧口径按块大小计，压缩率 30~70% 的
+          docx/日志/PDF 显示值明显低于用户按原文件心算的速率）；
+        - 不含喷泉冗余符号（那些不推进文件进度，会虚高）。
+
+        断点续传时 decoder 带种子，故按「新增解出块数」计（见 _start_resolved），
+        避免把历史进度算进当前速率；会话切换（新 MANIFEST 重建 decoder）基准归零。
         """
         m = self.session.manifest
-        unique = self.session.unique_symbols
         e = self.elapsed_seconds
-        if m is None or unique <= 0 or e <= 0:
+        if m is None or e <= 0:
             return 0.0
-        return unique * (1 << m.chunk_size_log) / e
+        dec = self.session._decoder
+        if dec is None:
+            return 0.0
+        # 会话切换（新 MANIFEST 重建 decoder）后基准归零，避免旧会话进度污染
+        if dec is not self._last_decoder:
+            self._start_resolved = 0
+            self._last_decoder = dec
+        new_resolved = max(0, dec.resolved_count - self._start_resolved)
+        if new_resolved <= 0:
+            return 0.0
+        return m.raw_size / m.total_chunks * new_resolved / e
 
     @property
     def fps_avg(self) -> float:
@@ -220,18 +242,16 @@ class ReceivePipeline:
     def _finalize(self) -> None:
         m = self.session.manifest
         encoded = self.session.reassemble()
-        if m.compression == Compression.NONE:
-            data = encoded
-        elif m.compression == Compression.ZLIB:
-            data = zlib.decompress(encoded)
-        else:
-            raise ValueError(f"暂不支持的压缩类型: {m.compression}")
+        data = decompress(m.compression, encoded)
         if hashlib.sha256(data).digest() != m.raw_sha256:
             raise ValueError("SHA-256 校验失败：数据损坏")
         self.result = ReceiveResult(
             m.content_type,
             m.filename if m.content_type == ContentType.FILE else "",
             data,
+            compression=m.compression,
+            raw_size=m.raw_size,
+            encoded_size=m.encoded_size,
         )
         self._finalized = True
         if self._persist:

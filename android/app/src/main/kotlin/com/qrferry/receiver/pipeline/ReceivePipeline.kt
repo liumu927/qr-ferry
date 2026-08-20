@@ -1,6 +1,8 @@
 package com.qrferry.receiver.pipeline
 
+import com.github.luben.zstd.ZstdInputStream
 import com.google.mlkit.vision.barcode.common.Barcode
+import com.qrferry.receiver.core.Compression
 import com.qrferry.receiver.core.ContentType
 import com.qrferry.receiver.core.FrameType
 import com.qrferry.receiver.core.ManifestPayload
@@ -8,6 +10,7 @@ import com.qrferry.receiver.core.Proto
 import com.qrferry.receiver.core.ProtocolError
 import com.qrferry.receiver.core.ReceiveSession
 import com.qrferry.receiver.core.decodeFrame
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.security.MessageDigest
@@ -114,11 +117,17 @@ class ReceivePipeline {
         return false
     }
 
-    /** 完成后重组 → 解压 → SHA-256 校验，返回结果（TEXT 直接给文本；FILE 给字节+文件名，由上层落盘）。 */
+    /** 完成后重组 → 解压 → SHA-256 校验，返回结果（TEXT 直接给文本；FILE 给字节+文件名，由上层落盘）。
+     *  解压按 MANIFEST 的 compression 字段分派：NONE 原样 / ZLIB 标准 zlib / ZSTD 标准 zstd 帧。 */
     fun finalize(): Result {
         val m = session.manifest ?: error("会话未建立")
         val encoded = session.reassemble()
-        val raw = inflateZlib(encoded)
+        val raw = when (Compression.of(m.compression)) {
+            Compression.NONE -> encoded
+            Compression.ZLIB -> inflateZlib(encoded)
+            Compression.ZSTD -> inflateZstd(encoded)
+            null -> throw ProtocolError("未知 compression=${m.compression}")
+        }
         val shaHex = MessageDigest.getInstance("SHA-256").digest(raw).toHex()
         val shaOk = shaHex == m.rawSha256.toHex()
         return when (ContentType.of(m.contentType)) {
@@ -171,6 +180,13 @@ class ReceivePipeline {
             }
             inf.end()
             return out.toByteArray()
+        }
+
+        /** 解压标准 zstd 帧（Python zstandard / 本端 Zstd.compress 产出）。 */
+        private fun inflateZstd(data: ByteArray): ByteArray {
+            ZstdInputStream(ByteArrayInputStream(data)).use { input ->
+                return input.readBytes()
+            }
         }
     }
 }

@@ -86,7 +86,7 @@ class ReceiveSession:
         m = ManifestPayload.unpack(payload)
         if m.content_type not in (ContentType.FILE, ContentType.TEXT):
             raise ProtocolError("未知 content_type")
-        if m.compression not in (Compression.NONE, Compression.ZLIB):
+        if m.compression not in (Compression.NONE, Compression.ZLIB, Compression.ZSTD):
             raise ProtocolError("未知或暂不支持 compression")
         if m.lt_dist not in (LtDistribution.RSD, LtDistribution.ISD, LtDistribution.DEGENERATE):
             raise ProtocolError("未知 lt_dist")

@@ -13,6 +13,8 @@ zxing-cpp==3.1.0
 segno==1.6.6
 Pillow==12.3.0
 numpy==2.5.1
+zstandard==0.25.0   # ZSTD 压缩（协议 Compression.ZSTD=0x02；Android 端 zstd-jni 对齐）
+pikepdf==10.12.0    # PDF 流重压缩（发送端文件优化；无则 PDF 优化自动跳过）
 #
 # 开发依赖
 pytest==9.1.1
