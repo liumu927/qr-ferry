@@ -20,12 +20,13 @@ import android.util.Log
 import android.util.Size
 import android.view.View
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import android.webkit.MimeTypeMap
 import android.graphics.drawable.BitmapDrawable
-import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ExperimentalGetImage
@@ -39,10 +40,13 @@ import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+import com.qrferry.receiver.core.Compression
+import com.qrferry.receiver.core.ContentType
 import com.qrferry.receiver.core.LtEncoder
 import com.qrferry.receiver.databinding.ActivityMainBinding
 import com.qrferry.receiver.pipeline.ReceivePipeline
 import com.qrferry.receiver.send.ColorMatrixRenderer
+import com.qrferry.receiver.send.FileOptimizer
 import com.qrferry.receiver.send.QrRenderer
 import com.qrferry.receiver.send.TextSendController
 import kotlin.random.Random
@@ -66,6 +70,10 @@ class MainActivity : AppCompatActivity() {
     private val qrRenderer = QrRenderer()
     private var sendController: TextSendController? = null
     private var selectedFile: SelectedSendFile? = null
+    private var rawSelectedFile: SelectedSendFile? = null   // 优化前的原始文件（取消勾选时还原）
+    private var optimizeToken = 0                           // 异步优化竞态令牌
+    private var optimizeRunning = false                     // 串行单飞：同时只允许一个优化线程
+    private var optimizePending = false                     // 优化期间又有新选择 → 完成后重跑最新
     private var sending = false
     private var previousScreenBrightness: Float? = null
     // 发送节拍（启动发送时快照，避免后台线程读 UI 状态）
@@ -73,6 +81,11 @@ class MainActivity : AppCompatActivity() {
     private var sendPeriodMs = 125L
     private var sendIsColor = false
     private var sendEcLevel = ErrorCorrectionLevel.L
+    // 发送参数下拉选中项（AutoCompleteTextView 无 selectedItemPosition，改用字段保存）
+    private var codecPosition = 0
+    private var fpsPosition = FPS_OPTIONS.indexOf(DEFAULT_FPS)
+    private var frameBytesPosition = 0
+    private var ecPosition = 0
 
     private val scanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder()
@@ -119,6 +132,8 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         pipeline = ReceivePipeline()
+        // 副标题随构建版本显示（BuildConfig.VERSION_NAME 与 gradle versionName 同步）
+        binding.subtitleText.text = "光学二维码摆渡 · v${BuildConfig.VERSION_NAME}"
 
         setupSendUi()
         binding.btnReset.setOnClickListener { reset() }
@@ -138,38 +153,39 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupSendUi() {
-        val codecAdapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_item,
-            listOf("标准QR（推荐）", "彩色码（实验）")
-        )
-        codecAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        binding.sendCodecSpinner.adapter = codecAdapter
+        // 四个下拉框：ExposedDropdownMenu（AutoCompleteTextView），选中项存字段
+        val codecOptions = listOf("标准QR（推荐）", "彩色码（实验）")
+        binding.sendCodecInput.setAdapter(
+            ArrayAdapter(this, android.R.layout.simple_list_item_1, codecOptions))
+        binding.sendCodecInput.setText(codecOptions[codecPosition], false)
+        binding.sendCodecInput.setOnItemClickListener { _, _, position, _ ->
+            codecPosition = position
+            refreshSendEnabled()
+        }
 
-        val fpsAdapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_item,
-            FPS_OPTIONS.map { "$it FPS" }
-        )
-        fpsAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        binding.sendFpsSpinner.adapter = fpsAdapter
-        binding.sendFpsSpinner.setSelection(FPS_OPTIONS.indexOf(DEFAULT_FPS))
+        val fpsOptions = FPS_OPTIONS.map { "$it FPS" }
+        binding.sendFpsInput.setAdapter(
+            ArrayAdapter(this, android.R.layout.simple_list_item_1, fpsOptions))
+        binding.sendFpsInput.setText(fpsOptions[fpsPosition], false)
+        binding.sendFpsInput.setOnItemClickListener { _, _, position, _ ->
+            fpsPosition = position
+        }
 
-        val frameBytesAdapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_item,
-            FRAME_BYTES_OPTIONS.map { "帧长 $it B" }
-        )
-        frameBytesAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        binding.sendFrameBytesSpinner.adapter = frameBytesAdapter
+        val frameBytesOptions = FRAME_BYTES_OPTIONS.map { "帧长 $it B" }
+        binding.sendFrameBytesInput.setAdapter(
+            ArrayAdapter(this, android.R.layout.simple_list_item_1, frameBytesOptions))
+        binding.sendFrameBytesInput.setText(frameBytesOptions[frameBytesPosition], false)
+        binding.sendFrameBytesInput.setOnItemClickListener { _, _, position, _ ->
+            frameBytesPosition = position
+        }
 
-        val ecAdapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_item,
-            listOf("纠错 L", "纠错 M")
-        )
-        ecAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        binding.sendEcSpinner.adapter = ecAdapter
+        val ecOptions = listOf("纠错 L", "纠错 M")
+        binding.sendEcInput.setAdapter(
+            ArrayAdapter(this, android.R.layout.simple_list_item_1, ecOptions))
+        binding.sendEcInput.setText(ecOptions[ecPosition], false)
+        binding.sendEcInput.setOnItemClickListener { _, _, position, _ ->
+            ecPosition = position
+        }
         binding.sendTextInput.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
@@ -178,21 +194,41 @@ class MainActivity : AppCompatActivity() {
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
-        binding.sendCodecSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                refreshSendEnabled()
-            }
-            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
-        }
         binding.sendTypeToggle.addOnButtonCheckedListener { _, _, _ ->
             refreshSendTypeUi()
             refreshSendEnabled()
         }
         binding.btnClearSend.setOnClickListener {
             selectedFile = null
+            rawSelectedFile = null
+            optimizeToken++
             binding.sendTextInput.text?.clear()
             binding.sendFileInfo.text = "未选择文件"
             refreshSendEnabled()
+        }
+        binding.btnClearSendText.setOnClickListener {
+            selectedFile = null
+            rawSelectedFile = null
+            optimizeToken++
+            binding.sendTextInput.text?.clear()
+            binding.sendFileInfo.text = "未选择文件"
+            refreshSendEnabled()
+        }
+        binding.btnStartSendText.setOnClickListener { toggleSending() }
+        binding.sendOptimizeCheck.setOnCheckedChangeListener { _, _ ->
+            if (rawSelectedFile != null) applyOptimization()
+        }
+        // 圆形叹号：点击才展示括号内的说明，避免「接收文件会不同」常驻造成歧义
+        binding.btnOptimizeInfo.setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("允许有损优化")
+                .setMessage(
+                    "无损优化自动进行：DOCX/XLSX/PPTX 重打包、PDF 流压缩，不改变文件内容。\n\n" +
+                        "勾选后额外允许有损转码：照片 PNG→JPEG、截图调色板量化、OOXML 内嵌图片压缩等——" +
+                        "接收到的文件与原文件不同（格式/质量/透明通道可能变化）。"
+                )
+                .setPositiveButton("知道了", null)
+                .show()
         }
         binding.btnPickFile.setOnClickListener {
             binding.sendTypeToggle.check(binding.btnSendFile.id)
@@ -216,6 +252,7 @@ class MainActivity : AppCompatActivity() {
     private fun refreshSendEnabled() {
         val ready = if (isFileMode()) selectedFile != null else !binding.sendTextInput.text.isNullOrBlank()
         binding.btnStartSend.isEnabled = ready
+        binding.btnStartSendText.isEnabled = ready
         binding.sendStatusText.text = when {
             sending -> binding.sendStatusText.text
             ready -> "准备发送"
@@ -229,15 +266,25 @@ class MainActivity : AppCompatActivity() {
         binding.sendTextInput.visibility = if (fileMode) View.GONE else View.VISIBLE
         binding.sendMetaText.visibility = if (fileMode) View.GONE else View.VISIBLE
         binding.sendFileInfo.visibility = if (fileMode) View.VISIBLE else View.GONE
-        binding.btnPickFile.isEnabled = !sending && fileMode
+        binding.sendOptimizeCheck.visibility = if (fileMode) View.VISIBLE else View.GONE
+        binding.btnOptimizeInfo.visibility = if (fileMode) View.VISIBLE else View.GONE
+        // 文件模式：两行按钮（选择文件/清空 + 开始发送）；
+        // 文本模式：一行（清空内容/开始发送）
+        // 注：发送端无断点续传，勿再添加「恢复发送」类按钮（PC 端续传已并入开始发送）
+        binding.fileButtonsRow1.visibility = if (fileMode) View.VISIBLE else View.GONE
+        binding.fileButtonsRow2.visibility = if (fileMode) View.VISIBLE else View.GONE
+        binding.textButtonsRow.visibility = if (fileMode) View.GONE else View.VISIBLE
+        binding.btnPickFile.isEnabled = !sending
         // 文本/文件切换时联动帧长/fps 默认（仅非发送中，避免覆盖用户手调）：
         // 文本 700B/8fps、文件 2200B/8fps —— 实测稳定工作点
         if (!sending) {
             val defaultBytes = if (fileMode) 2200 else 700
-            binding.sendFrameBytesSpinner.setSelection(
-                FRAME_BYTES_OPTIONS.indexOf(defaultBytes).coerceAtLeast(0))
-            binding.sendFpsSpinner.setSelection(
-                FPS_OPTIONS.indexOf(DEFAULT_FPS).coerceAtLeast(0))
+            val defaultBytesIdx = FRAME_BYTES_OPTIONS.indexOf(defaultBytes).coerceAtLeast(0)
+            frameBytesPosition = defaultBytesIdx
+            binding.sendFrameBytesInput.setText("帧长 ${FRAME_BYTES_OPTIONS[defaultBytesIdx]} B", false)
+            val defaultFpsIdx = FPS_OPTIONS.indexOf(DEFAULT_FPS).coerceAtLeast(0)
+            fpsPosition = defaultFpsIdx
+            binding.sendFpsInput.setText("${FPS_OPTIONS[defaultFpsIdx]} FPS", false)
         }
     }
 
@@ -289,18 +336,25 @@ class MainActivity : AppCompatActivity() {
                 )
             }
             sending = true
+            // 收起软键盘并失焦：发送时 QR 全尺寸显示，避免被键盘压缩/遮挡影响接收端扫码
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            imm.hideSoftInputFromWindow(binding.sendTextInput.windowToken, 0)
+            binding.sendTextInput.clearFocus()
             previousScreenBrightness = window.attributes.screenBrightness
             window.attributes = window.attributes.apply { screenBrightness = 1.0f }
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            binding.sendCodecSpinner.isEnabled = false
-            binding.sendFpsSpinner.isEnabled = false
-            binding.sendFrameBytesSpinner.isEnabled = false
-            binding.sendEcSpinner.isEnabled = false
+            binding.sendCodecInput.isEnabled = false
+            binding.sendFpsInput.isEnabled = false
+            binding.sendFrameBytesInput.isEnabled = false
+            binding.sendEcInput.isEnabled = false
             binding.sendTypeToggle.isEnabled = false
             binding.sendTextInput.isEnabled = false
             binding.btnPickFile.isEnabled = false
             binding.btnClearSend.isEnabled = false
+            binding.btnClearSendText.isEnabled = false
+            binding.sendOptimizeCheck.isEnabled = false
             binding.btnStartSend.text = "停止发送"
+            binding.btnStartSendText.text = "停止发送"
             binding.sendPlaceholder.visibility = View.GONE
             binding.sendStatusText.text = "发送中：K=${sendController?.K}，${selectedFps()} FPS"
             // 节拍锚定：渲染耗时不再叠加到标称间隔上；渲染慢于周期时自然顺延（不追赶连发）
@@ -309,7 +363,8 @@ class MainActivity : AppCompatActivity() {
             sendPeriodMs = 1000L / selectedFps()
             nextSendDeadline = SystemClock.uptimeMillis()
             sendHandler.post(sendTick)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
+            // 捕获 Throwable（含 OOM）：初始化失败降级为可恢复状态，绝不闪退
             stopSending("发送初始化失败: ${e.message}")
         }
     }
@@ -343,15 +398,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun selectedFps(): Int =
-        FPS_OPTIONS.getOrElse(binding.sendFpsSpinner.selectedItemPosition) { DEFAULT_FPS }
+        FPS_OPTIONS.getOrElse(fpsPosition) { DEFAULT_FPS }
 
     private fun selectedFrameBytes(): Int =
-        FRAME_BYTES_OPTIONS.getOrElse(binding.sendFrameBytesSpinner.selectedItemPosition) {
+        FRAME_BYTES_OPTIONS.getOrElse(frameBytesPosition) {
             LtEncoder.DEFAULT_MAX_FRAME_BYTES
         }
 
     private fun selectedEcLevel(): ErrorCorrectionLevel =
-        if (binding.sendEcSpinner.selectedItemPosition == 1) {
+        if (ecPosition == 1) {
             ErrorCorrectionLevel.M
         } else {
             ErrorCorrectionLevel.L
@@ -367,19 +422,22 @@ class MainActivity : AppCompatActivity() {
         sendController = null
         sendHandler.removeCallbacks(sendTick)
         binding.btnStartSend.text = "开始发送"
-        binding.sendCodecSpinner.isEnabled = true
-        binding.sendFpsSpinner.isEnabled = true
-        binding.sendFrameBytesSpinner.isEnabled = true
-        binding.sendEcSpinner.isEnabled = true
+        binding.btnStartSendText.text = "开始发送"
+        binding.sendCodecInput.isEnabled = true
+        binding.sendFpsInput.isEnabled = true
+        binding.sendFrameBytesInput.isEnabled = true
+        binding.sendEcInput.isEnabled = true
         binding.sendTypeToggle.isEnabled = true
         binding.sendTextInput.isEnabled = true
         binding.btnClearSend.isEnabled = true
+        binding.btnClearSendText.isEnabled = true
+        binding.sendOptimizeCheck.isEnabled = true
         binding.sendStatusText.text = message
         refreshSendTypeUi()
         refreshSendEnabled()
     }
 
-    private fun isColorSend(): Boolean = binding.sendCodecSpinner.selectedItemPosition == 1
+    private fun isColorSend(): Boolean = codecPosition == 1
 
     private fun isFileMode(): Boolean = binding.sendTypeToggle.checkedButtonId == binding.btnSendFile.id
 
@@ -388,17 +446,82 @@ class MainActivity : AppCompatActivity() {
             val name = trimFilename(queryDisplayName(uri) ?: "qrferry.bin")
             val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
                 ?: error("无法读取文件")
-            selectedFile = SelectedSendFile(name, bytes)
+            rawSelectedFile = SelectedSendFile(name, bytes)
             binding.sendTypeToggle.check(binding.btnSendFile.id)
-            binding.sendFileInfo.text = "$name · ${formatBytes(bytes.size.toLong())}"
+            applyOptimization()
             refreshSendTypeUi()
             refreshSendEnabled()
         } catch (e: Exception) {
             selectedFile = null
+            rawSelectedFile = null
             binding.sendFileInfo.text = "文件读取失败"
             refreshSendEnabled()
             Toast.makeText(this, "文件读取失败: ${e.message}", Toast.LENGTH_LONG).show()
         }
+    }
+
+    /**
+     * 自动文件优化：选择文件后即后台做**无损**再编码（OOXML 重打包等，内容不变）；
+     * 勾选「允许有损优化」时额外允许照片转 JPEG / 降位等**有损**转码（接收文件会不同）。
+     * 仅当结果更小时生效。
+     *
+     * 健壮性（v0.1.16 修复）：
+     * - 串行单飞：一次只允许一个优化线程，新选择先挂 pending，避免多次选文件并发
+     *   Bitmap 解码叠加内存 → OutOfMemoryError 闪退；
+     * - 捕获 Throwable（含 OOM）：优化失败回退原文件，绝不崩溃；
+     * - 优化期间 selectedFile=null 且完成后 refreshSendEnabled()——修复"开始按钮
+     *   不亮/发送旧文件"的竞态；
+     * - optimizeToken 递增校验：丢弃过期线程结果。
+     */
+    private fun applyOptimization() {
+        val raw = rawSelectedFile ?: return
+        val token = ++optimizeToken
+        val lossy = binding.sendOptimizeCheck.isChecked
+        if (optimizeRunning) {
+            optimizePending = true   // 最新选择挂起，当前线程结束后重跑
+            return
+        }
+        optimizeRunning = true
+        selectedFile = null          // 优化期间禁用开始（防止发送旧文件）
+        binding.sendFileInfo.text = "优化中…"
+        refreshSendEnabled()
+        Thread {
+            var failed = false
+            val res = try {
+                FileOptimizer.optimize(raw.bytes, raw.name, lossy = lossy)
+            } catch (t: Throwable) {
+                failed = true
+                null
+            }
+            mainHandler.post {
+                optimizeRunning = false
+                val rerun = optimizePending
+                optimizePending = false
+                if (rerun) {
+                    applyOptimization()
+                    return@post
+                }
+                if (token != optimizeToken || rawSelectedFile !== raw) return@post
+                when {
+                    res != null -> {
+                        selectedFile = SelectedSendFile(res.filename, res.data)
+                        binding.sendFileInfo.text =
+                            "${raw.name} → ${res.filename}\n${res.description}"
+                    }
+                    failed -> {
+                        selectedFile = raw
+                        binding.sendFileInfo.text =
+                            "${raw.name} · ${formatBytes(raw.bytes.size.toLong())}（优化失败，已使用原文件）"
+                    }
+                    else -> {
+                        selectedFile = raw
+                        binding.sendFileInfo.text =
+                            "${raw.name} · ${formatBytes(raw.bytes.size.toLong())}（无优化收益）"
+                    }
+                }
+                refreshSendEnabled()
+            }
+        }.start()
     }
 
     private fun queryDisplayName(uri: Uri): String? {
@@ -516,10 +639,12 @@ class MainActivity : AppCompatActivity() {
         val missingStr = if (missing.size <= 20) missing.toString() else "[${missing.size} 块]"
         val etaStr = p.etaSeconds?.let { formatEta(it) } ?: "—"
         val head = if (m != null) {
+            val compName = Compression.of(m.compression)?.name ?: "?${m.compression}"
+            val typeName = ContentType.of(m.contentType)?.name ?: "?${m.contentType}"
             "接收中… ${pct}% | 缺块 $missingStr | ETA $etaStr\n" +
                 "速率 %.1f KB/s（均 %.1f） · %.1f fps\n".format(
                     p.linkBpsInstant / 1024.0, p.linkBpsAvg / 1024.0, p.fpsInstant) +
-                "K=${p.K} content=${m.contentType} comp=${m.compression}\n"
+                "K=${p.K} type=${typeName} comp=$compName\n"
         } else {
             "等待 MANIFEST…（先收到 MANIFEST 才开始）\n"
         }

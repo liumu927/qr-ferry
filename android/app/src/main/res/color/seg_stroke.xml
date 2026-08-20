@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 分段按钮描边：选中 = accent，未选中 = 分隔线灰 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_checked="true" android:color="@color/accent" />
+    <item android:color="@color/line" />
+</selector>

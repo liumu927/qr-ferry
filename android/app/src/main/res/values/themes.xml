@@ -1,3 +1,32 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <style name="Theme.Qrferry" parent="Theme.MaterialComponents.DayNight.NoActionBar" />
+    <style name="Theme.Qrferry" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- M3 语义色：统一映射到设计令牌；深色值由 values-night/colors.xml 同名覆盖 -->
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <item name="colorPrimaryContainer">@color/accent_soft</item>
+        <item name="colorOnPrimaryContainer">@color/accent</item>
+        <item name="colorSecondary">@color/accent</item>
+        <item name="colorOnSecondary">@color/white</item>
+        <item name="colorSecondaryContainer">@color/accent_soft</item>
+        <item name="colorOnSecondaryContainer">@color/accent</item>
+        <item name="colorSurface">@color/surface</item>
+        <item name="colorOnSurface">@color/ink</item>
+        <item name="colorSurfaceVariant">@color/surface_muted</item>
+        <item name="colorOnSurfaceVariant">@color/muted</item>
+        <item name="colorOutline">@color/line</item>
+        <item name="colorOutlineVariant">@color/line</item>
+        <item name="android:colorBackground">@color/app_bg</item>
+    </style>
+
+    <!-- 分段按钮（文本/文件等）：圆角胶囊 + 选中态 accent 浅底/文字/描边 + 图标按态着色 -->
+    <style name="Widget.Qrferry.SegButton" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="cornerRadius">12dp</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="backgroundTint">@color/seg_checked_bg</item>
+        <item name="strokeColor">@color/seg_stroke</item>
+        <item name="android:textColor">@color/seg_text</item>
+        <item name="iconTint">@color/seg_text</item>
+        <item name="iconGravity">textStart</item>
+    </style>
 </resources>

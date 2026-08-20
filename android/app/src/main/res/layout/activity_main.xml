@@ -7,20 +7,22 @@
     android:orientation="vertical"
     android:padding="16dp">
 
+    <!-- 品牌区 -->
     <TextView
         android:id="@+id/titleText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
         android:text="qr-ferry"
         android:textColor="@color/ink"
-        android:textSize="24sp"
+        android:textSize="22sp"
         android:textStyle="bold" />
 
     <TextView
         android:id="@+id/subtitleText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
+        android:layout_marginTop="4dp"
         android:text="光学二维码摆渡"
         android:textColor="@color/muted"
         android:textSize="13sp" />
@@ -29,24 +31,24 @@
         android:id="@+id/modeToggle"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="14dp"
+        android:layout_marginTop="16dp"
         app:checkedButton="@id/btnModeSend"
         app:selectionRequired="true"
         app:singleSelection="true">
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnModeSend"
-            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            style="@style/Widget.Material3.Button.OutlinedButton"
             android:layout_width="0dp"
-            android:layout_height="44dp"
+            android:layout_height="48dp"
             android:layout_weight="1"
             android:text="发送" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnModeReceive"
-            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            style="@style/Widget.Material3.Button.OutlinedButton"
             android:layout_width="0dp"
-            android:layout_height="44dp"
+            android:layout_height="48dp"
             android:layout_weight="1"
             android:text="接收" />
     </com.google.android.material.button.MaterialButtonToggleGroup>
@@ -60,90 +62,121 @@
         android:orientation="vertical"
         android:visibility="gone">
 
-        <!-- 二维码显示区：固定 360dp，不随下方控件区滚动，也绝不被顶走 -->
-        <FrameLayout
-            android:id="@+id/codeStage"
+        <!-- 二维码显示区：MaterialCardView 卡片（18dp 圆角）。
+             高度与下方控制卡 1:1 权重分配：软键盘弹出（adjustResize）时两者按比例压缩，
+             控制卡（含文本框）保持可见，不会因固定高度被挤没。 -->
+        <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
-            android:layout_height="360dp"
-            android:layout_gravity="center"
-            android:layout_marginBottom="12dp"
-            android:background="@drawable/preview_surface"
-            android:minHeight="340dp">
+            android:layout_height="0dp"
+            android:layout_marginBottom="16dp"
+            android:layout_weight="1"
+            app:cardBackgroundColor="@color/surface_muted"
+            app:cardCornerRadius="18dp"
+            app:cardElevation="1dp">
 
-            <ImageView
-                android:id="@+id/sendCodeView"
+            <FrameLayout
+                android:id="@+id/codeStage"
                 android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:layout_margin="12dp"
-                android:adjustViewBounds="true"
-                android:contentDescription="发送码显示区"
-                android:scaleType="fitCenter" />
+                android:layout_height="match_parent">
 
-            <TextView
-                android:id="@+id/sendPlaceholder"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="center"
-                android:text="待发送"
-                android:textColor="@color/muted"
-                android:textSize="14sp" />
-        </FrameLayout>
+                <ImageView
+                    android:id="@+id/sendCodeView"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:layout_margin="6dp"
+                    android:adjustViewBounds="true"
+                    android:contentDescription="发送码显示区"
+                    android:scaleType="fitCenter" />
 
-        <!-- 面板边框固定容器：panel_surface 背景挂在容器上，内部 ScrollView 只滚内容 -->
-        <LinearLayout
+                <TextView
+                    android:id="@+id/sendPlaceholder"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:text="待发送"
+                    android:textColor="@color/muted"
+                    android:textSize="14sp" />
+            </FrameLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- 控制面板：MaterialCardView（16dp 圆角 + 1dp 描边）。
+             卡片内垂直布局：「文件/文本」选项卡固定在顶部不随滚动，
+             下方 ScrollView 只滚内容（LinearLayout 内 weight 生效）。 -->
+        <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            android:background="@drawable/panel_surface"
-            android:orientation="vertical">
+            app:cardBackgroundColor="@color/surface"
+            app:cardCornerRadius="16dp"
+            app:cardElevation="1dp"
+            app:strokeColor="@color/line"
+            app:strokeWidth="1dp">
 
-            <ScrollView
+            <LinearLayout
                 android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="1"
-                android:fillViewport="true">
+                android:layout_height="match_parent"
+                android:orientation="vertical">
 
-                <LinearLayout
+                <com.google.android.material.button.MaterialButtonToggleGroup
+                    android:id="@+id/sendTypeToggle"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="14dp">
+                    android:layout_marginStart="16dp"
+                    android:layout_marginTop="16dp"
+                    android:layout_marginEnd="16dp"
+                    android:layout_marginBottom="8dp"
+                    app:checkedButton="@id/btnSendFile"
+                    app:selectionRequired="true"
+                    app:singleSelection="true">
 
-                    <com.google.android.material.button.MaterialButtonToggleGroup
-                        android:id="@+id/sendTypeToggle"
+                    <!-- 文件在前、文本在后（与 PC 端一致），默认选中「文件」 -->
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnSendFile"
+                        style="@style/Widget.Qrferry.SegButton"
+                        android:layout_width="0dp"
+                        android:layout_height="44dp"
+                        android:layout_weight="1"
+                        android:text="文件"
+                        app:icon="@drawable/ic_file" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnSendText"
+                        style="@style/Widget.Qrferry.SegButton"
+                        android:layout_width="0dp"
+                        android:layout_height="44dp"
+                        android:layout_weight="1"
+                        android:text="文本"
+                        app:icon="@drawable/ic_text" />
+                </com.google.android.material.button.MaterialButtonToggleGroup>
+
+                <ScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:fillViewport="true">
+
+                    <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        app:checkedButton="@id/btnSendFile"
-                        app:selectionRequired="true"
-                        app:singleSelection="true">
+                        android:orientation="vertical"
+                        android:padding="16dp">
 
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnSendText"
-                            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                            android:layout_width="0dp"
-                            android:layout_height="42dp"
-                            android:layout_weight="1"
-                            android:text="文本" />
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnSendFile"
-                            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                            android:layout_width="0dp"
-                            android:layout_height="42dp"
-                            android:layout_weight="1"
-                            android:text="文件" />
-                    </com.google.android.material.button.MaterialButtonToggleGroup>
-
-                    <EditText
+                    <!-- 可滚动文本框：ScrollableEditText 在内容溢出时接管手势，
+                         否则让外层 ScrollView 滚动（避免嵌套滚动冲突） -->
+                    <com.qrferry.receiver.widget.ScrollableEditText
                         android:id="@+id/sendTextInput"
                         android:layout_width="match_parent"
                         android:layout_height="128dp"
                         android:layout_marginTop="12dp"
                         android:background="@drawable/preview_surface"
+                        android:fadeScrollbars="false"
                         android:gravity="top|start"
                         android:hint="输入要发送的文本"
                         android:inputType="textMultiLine|textCapSentences"
+                        android:overScrollMode="ifContentScrolls"
                         android:padding="12dp"
+                        android:scrollbarStyle="insideInset"
+                        android:scrollbars="vertical"
                         android:textColor="@color/ink"
                         android:textColorHint="@color/muted"
                         android:textSize="14sp" />
@@ -167,49 +200,40 @@
                         android:textColor="@color/muted"
                         android:textSize="12sp" />
 
+                    <!-- 允许有损优化：文本去掉括号歧义，右侧圆形叹号点击显示说明 -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
-                        android:baselineAligned="false"
+                        android:layout_marginTop="4dp"
+                        android:gravity="center_vertical"
                         android:orientation="horizontal">
 
-                        <Spinner
-                            android:id="@+id/sendCodecSpinner"
+                        <com.google.android.material.checkbox.MaterialCheckBox
+                            android:id="@+id/sendOptimizeCheck"
                             android:layout_width="0dp"
-                            android:layout_height="44dp"
-                            android:layout_weight="1" />
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:checked="false"
+                            android:text="允许有损优化"
+                            android:textColor="@color/ink"
+                            android:textSize="13sp"
+                            android:visibility="gone" />
 
-                        <Spinner
-                            android:id="@+id/sendFpsSpinner"
-                            android:layout_width="0dp"
-                            android:layout_height="44dp"
-                            android:layout_marginStart="8dp"
-                            android:layout_weight="1" />
+                        <ImageButton
+                            android:id="@+id/btnOptimizeInfo"
+                            android:layout_width="24dp"
+                            android:layout_height="24dp"
+                            android:layout_marginStart="4dp"
+                            android:background="?attr/selectableItemBackgroundBorderless"
+                            android:contentDescription="允许有损优化说明"
+                            android:src="@drawable/ic_info"
+                            android:tint="@color/muted"
+                            android:visibility="gone" />
                     </LinearLayout>
 
+                    <!-- 文件模式按钮（两行）：选择文件/清空 + 开始发送；文本模式隐藏 -->
                     <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:baselineAligned="false"
-                        android:orientation="horizontal">
-
-                        <Spinner
-                            android:id="@+id/sendFrameBytesSpinner"
-                            android:layout_width="0dp"
-                            android:layout_height="44dp"
-                            android:layout_weight="1" />
-
-                        <Spinner
-                            android:id="@+id/sendEcSpinner"
-                            android:layout_width="0dp"
-                            android:layout_height="44dp"
-                            android:layout_marginStart="8dp"
-                            android:layout_weight="1" />
-                    </LinearLayout>
-
-                    <LinearLayout
+                        android:id="@+id/fileButtonsRow1"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="12dp"
@@ -217,26 +241,27 @@
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnPickFile"
-                            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
                             android:layout_width="0dp"
-                            android:layout_height="46dp"
+                            android:layout_height="48dp"
                             android:layout_weight="1"
                             android:text="选择文件" />
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnClearSend"
-                            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
                             android:layout_width="0dp"
-                            android:layout_height="46dp"
+                            android:layout_height="48dp"
                             android:layout_marginStart="8dp"
                             android:layout_weight="1"
                             android:text="清空" />
                     </LinearLayout>
 
                     <LinearLayout
+                        android:id="@+id/fileButtonsRow2"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
+                        android:layout_marginTop="12dp"
                         android:orientation="horizontal">
 
                         <com.google.android.material.button.MaterialButton
@@ -245,30 +270,149 @@
                             android:layout_height="48dp"
                             android:layout_weight="1"
                             android:enabled="false"
+                            app:cornerRadius="12dp"
                             android:text="开始发送" />
+                    </LinearLayout>
+
+                    <!-- 文本模式按钮（一行）：清空内容/开始发送；文件模式隐藏 -->
+                    <LinearLayout
+                        android:id="@+id/textButtonsRow"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:orientation="horizontal">
 
                         <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnResumeSend"
-                            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                            android:id="@+id/btnClearSendText"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="0dp"
+                            android:layout_height="48dp"
+                            android:layout_weight="1"
+                            android:text="清空内容" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnStartSendText"
                             android:layout_width="0dp"
                             android:layout_height="48dp"
                             android:layout_marginStart="8dp"
                             android:layout_weight="1"
                             android:enabled="false"
-                            android:text="恢复发送" />
+                            app:cornerRadius="12dp"
+                            android:text="开始发送" />
+                    </LinearLayout>
+
+                    <!-- 参数行 1：码制 / 帧率（ExposedDropdownMenu） -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:baselineAligned="false"
+                        android:orientation="horizontal">
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/sendCodecLayout"
+                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:hint="码制"
+                            app:endIconMode="dropdown_menu">
+
+                            <AutoCompleteTextView
+                                android:id="@+id/sendCodecInput"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:inputType="none"
+                                android:padding="8dp"
+                                android:textSize="14sp"
+                                android:textColor="@color/ink"
+                                android:textColorHint="@color/muted" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/sendFpsLayout"
+                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
+                            android:layout_weight="1"
+                            android:hint="帧率"
+                            app:endIconMode="dropdown_menu">
+
+                            <AutoCompleteTextView
+                                android:id="@+id/sendFpsInput"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:inputType="none"
+                                android:padding="8dp"
+                                android:textSize="14sp"
+                                android:textColor="@color/ink"
+                                android:textColorHint="@color/muted" />
+                        </com.google.android.material.textfield.TextInputLayout>
+                    </LinearLayout>
+
+                    <!-- 参数行 2：帧长 / 纠错 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:baselineAligned="false"
+                        android:orientation="horizontal">
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/sendFrameBytesLayout"
+                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:hint="帧长"
+                            app:endIconMode="dropdown_menu">
+
+                            <AutoCompleteTextView
+                                android:id="@+id/sendFrameBytesInput"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:inputType="none"
+                                android:padding="8dp"
+                                android:textSize="14sp"
+                                android:textColor="@color/ink"
+                                android:textColorHint="@color/muted" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/sendEcLayout"
+                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
+                            android:layout_weight="1"
+                            android:hint="纠错"
+                            app:endIconMode="dropdown_menu">
+
+                            <AutoCompleteTextView
+                                android:id="@+id/sendEcInput"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:inputType="none"
+                                android:padding="8dp"
+                                android:textSize="14sp"
+                                android:textColor="@color/ink"
+                                android:textColorHint="@color/muted" />
+                        </com.google.android.material.textfield.TextInputLayout>
                     </LinearLayout>
 
                     <TextView
                         android:id="@+id/sendStatusText"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
+                        android:layout_marginTop="12dp"
                         android:text="未开始发送"
                         android:textColor="@color/muted"
                         android:textSize="12sp" />
                 </LinearLayout>
             </ScrollView>
-        </LinearLayout>
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
     </LinearLayout>
 
     <LinearLayout
@@ -279,33 +423,44 @@
         android:layout_weight="1"
         android:orientation="vertical">
 
-        <!-- 相机预览：固定 360dp，不随下方控件区滚动 -->
-        <androidx.camera.view.PreviewView
-            android:id="@+id/previewView"
+        <!-- 相机预览：MaterialCardView 卡片（18dp 圆角），内部固定 360dp -->
+        <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="360dp"
-            android:background="@drawable/preview_surface" />
+            app:cardBackgroundColor="@color/surface_muted"
+            app:cardCornerRadius="18dp"
+            app:cardElevation="1dp">
 
-        <!-- 面板边框固定容器：panel_surface 背景固定在容器上，内部 ScrollView 只滚内容 -->
-        <LinearLayout
+            <androidx.camera.view.PreviewView
+                android:id="@+id/previewView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@drawable/preview_surface" />
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- 控制面板：MaterialCardView（16dp 圆角 + 1dp 描边），内部 ScrollView 用
+             match_parent（FrameLayout 内 layout_weight 无效，0dp 会导致控制区不可见） -->
+        <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_marginTop="12dp"
             android:layout_weight="1"
-            android:background="@drawable/panel_surface"
-            android:orientation="vertical">
+            app:cardBackgroundColor="@color/surface"
+            app:cardCornerRadius="16dp"
+            app:cardElevation="1dp"
+            app:strokeColor="@color/line"
+            app:strokeWidth="1dp">
 
             <ScrollView
                 android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="1"
+                android:layout_height="match_parent"
                 android:fillViewport="true">
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="14dp">
+                    android:padding="16dp">
 
                     <LinearLayout
                         android:layout_width="match_parent"
@@ -314,18 +469,19 @@
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnReset"
-                            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
                             android:layout_width="0dp"
-                            android:layout_height="46dp"
+                            android:layout_height="48dp"
                             android:layout_weight="1"
                             android:text="重置" />
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnPause"
                             android:layout_width="0dp"
-                            android:layout_height="46dp"
+                            android:layout_height="48dp"
                             android:layout_marginStart="8dp"
                             android:layout_weight="1"
+                            app:cornerRadius="12dp"
                             android:text="暂停" />
                     </LinearLayout>
 
@@ -359,14 +515,14 @@
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
+                        android:layout_marginTop="12dp"
                         android:orientation="horizontal">
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnCopyResult"
-                            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
                             android:layout_width="0dp"
-                            android:layout_height="44dp"
+                            android:layout_height="48dp"
                             android:layout_weight="1"
                             android:text="复制文本"
                             android:visibility="gone" />
@@ -374,13 +530,15 @@
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnSaveResult"
                             android:layout_width="0dp"
-                            android:layout_height="44dp"
+                            android:layout_height="48dp"
+                            android:layout_marginStart="8dp"
                             android:layout_weight="1"
+                            app:cornerRadius="12dp"
                             android:text="保存文件"
                             android:visibility="gone" />
                     </LinearLayout>
                 </LinearLayout>
             </ScrollView>
-        </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
     </LinearLayout>
 </LinearLayout>

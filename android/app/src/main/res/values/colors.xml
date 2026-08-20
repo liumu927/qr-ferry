@@ -2,8 +2,8 @@
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
     <color name="status_bg">#EE111111</color>
-    <color name="ok">#FF2E7D32</color>
-    <color name="err">#FFC62828</color>
+    <color name="ok">#FF16A34A</color>
+    <color name="err">#FFDC2626</color>
     <color name="app_bg">#FFF8FAFC</color>
     <color name="surface">#FFFFFFFF</color>
     <color name="surface_muted">#FFE2E8F0</color>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 分段按钮背景：选中 = accent 浅底，未选中 = 透明（深色由 values-night 同名覆盖） -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_checked="true" android:color="@color/accent_soft" />
+    <item android:color="@android:color/transparent" />
+</selector>

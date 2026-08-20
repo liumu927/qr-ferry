@@ -18,7 +18,9 @@ class QrRenderer(private val sizePx: Int = 720) {
         val hints = mapOf(
             EncodeHintType.CHARACTER_SET to "ISO-8859-1",
             EncodeHintType.ERROR_CORRECTION to ecLevel,
-            EncodeHintType.MARGIN to 2,
+            // 静区 1 模块：外层卡片还有灰底留白，静区从 2 收窄到 1 让码体更大，
+            // zxing/ML Kit 对 1 模块静区仍可稳定解码。
+            EncodeHintType.MARGIN to 1,
         )
         val matrix = MultiFormatWriter().encode(text, BarcodeFormat.QR_CODE, sizePx, sizePx, hints)
         val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)

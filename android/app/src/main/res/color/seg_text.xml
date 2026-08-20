@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 分段按钮文字/图标：选中 = accent，未选中 = 次要灰（深色由 values-night 同名覆盖） -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_checked="true" android:color="@color/accent" />
+    <item android:color="@color/muted" />
+</selector>

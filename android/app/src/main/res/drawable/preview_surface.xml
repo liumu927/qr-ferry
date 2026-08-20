@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 输入框/结果区的浅灰底（12dp 圆角）；预览卡改用 MaterialCardView 的 cardCornerRadius -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android">
     <solid android:color="@color/surface_muted" />
-    <corners android:radius="18dp" />
+    <corners android:radius="12dp" />
 </shape>
