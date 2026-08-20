@@ -973,6 +973,7 @@ class MainWindow(QMainWindow):
         left.addWidget(self._s_start)
         # 全屏展示：勾选后发送期间 QR 显示在独立全屏遮罩窗口中（更大、更远可扫）
         self._s_fullscreen = QCheckBox("全屏展示（遮罩层）")
+        self._s_fullscreen.setChecked(True)   # 默认开启：首屏即获得最大扫码空间
         self._s_fullscreen.setToolTip("发送时在全屏黑色遮罩中显示二维码，码体更大，手机可离更远扫描")
         left.addWidget(self._s_fullscreen)
         left.addStretch(1)
