@@ -7,25 +7,49 @@
     android:orientation="vertical"
     android:padding="16dp">
 
-    <!-- 品牌区 -->
-    <TextView
-        android:id="@+id/titleText"
+    <!-- 品牌区（标题左、使用说明按钮右，保持工整） -->
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:text="qr-ferry"
-        android:textColor="@color/ink"
-        android:textSize="22sp"
-        android:textStyle="bold" />
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
 
-    <TextView
-        android:id="@+id/subtitleText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:text="光学二维码摆渡"
-        android:textColor="@color/muted"
-        android:textSize="13sp" />
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/titleText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="qr-ferry"
+                android:textColor="@color/ink"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/subtitleText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="光学二维码摆渡"
+                android:textColor="@color/muted"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnHelp"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:contentDescription="使用说明"
+            android:text="?"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+    </LinearLayout>
 
     <com.google.android.material.button.MaterialButtonToggleGroup
         android:id="@+id/modeToggle"
@@ -190,17 +214,7 @@
                         android:textColor="@color/muted"
                         android:textSize="12sp" />
 
-                    <TextView
-                        android:id="@+id/sendFileInfo"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="4dp"
-                        android:visibility="gone"
-                        android:text="未选择文件"
-                        android:textColor="@color/muted"
-                        android:textSize="12sp" />
-
-                    <!-- 允许有损优化：文本去掉括号歧义，右侧圆形叹号点击显示说明 -->
+                    <!-- 文件状态 + 就绪提示 同行：左文件名/未选择，右准备/请选择提示 -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
@@ -208,27 +222,74 @@
                         android:gravity="center_vertical"
                         android:orientation="horizontal">
 
-                        <com.google.android.material.checkbox.MaterialCheckBox
-                            android:id="@+id/sendOptimizeCheck"
+                        <TextView
+                            android:id="@+id/sendFileInfo"
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
-                            android:checked="false"
-                            android:text="允许有损优化"
-                            android:textColor="@color/ink"
-                            android:textSize="13sp"
-                            android:visibility="gone" />
+                            android:ellipsize="middle"
+                            android:maxLines="1"
+                            android:visibility="gone"
+                            android:text="未选择文件"
+                            android:textColor="@color/muted"
+                            android:textSize="12sp" />
 
-                        <ImageButton
-                            android:id="@+id/btnOptimizeInfo"
-                            android:layout_width="24dp"
-                            android:layout_height="24dp"
-                            android:layout_marginStart="4dp"
-                            android:background="?attr/selectableItemBackgroundBorderless"
-                            android:contentDescription="允许有损优化说明"
-                            android:src="@drawable/ic_info"
-                            android:tint="@color/muted"
-                            android:visibility="gone" />
+                        <TextView
+                            android:id="@+id/sendReadyHint"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
+                            android:text="准备发送"
+                            android:textColor="@color/accent"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <!-- 允许有损优化（叹号紧贴文字后）+ 全屏展示：一行两列 1:1 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <com.google.android.material.checkbox.MaterialCheckBox
+                                android:id="@+id/sendOptimizeCheck"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:checked="false"
+                                android:text="允许有损优化"
+                                android:textColor="@color/ink"
+                                android:textSize="13sp"
+                                android:visibility="gone" />
+
+                            <ImageButton
+                                android:id="@+id/btnOptimizeInfo"
+                                android:layout_width="24dp"
+                                android:layout_height="24dp"
+                                android:layout_marginStart="4dp"
+                                android:background="?attr/selectableItemBackgroundBorderless"
+                                android:contentDescription="允许有损优化说明"
+                                android:src="@drawable/ic_info"
+                                android:tint="@color/muted"
+                                android:visibility="gone" />
+                        </LinearLayout>
+
+                        <com.google.android.material.checkbox.MaterialCheckBox
+                            android:id="@+id/sendFullscreenCheck"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:checked="true"
+                            android:text="二维码全屏展示"
+                            android:textColor="@color/ink"
+                            android:textSize="13sp" />
                     </LinearLayout>
 
                     <!-- 文件模式按钮（两行）：选择文件/清空 + 开始发送；文本模式隐藏 -->
@@ -301,16 +362,32 @@
                             android:text="开始发送" />
                     </LinearLayout>
 
-                    <!-- 全屏展示：勾选后发送期间 QR 显示在全屏黑色遮罩中（码体更大，可离更远扫描） -->
-                    <com.google.android.material.checkbox.MaterialCheckBox
-                        android:id="@+id/sendFullscreenCheck"
+                    <!-- 发送参数：小标题 + 右侧叹号（集中查看参数说明） -->
+                    <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="12dp"
-                        android:checked="true"
-                        android:text="全屏展示（遮罩层）"
-                        android:textColor="@color/ink"
-                        android:textSize="13sp" />
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="发送参数"
+                            android:textColor="@color/muted"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+
+                        <ImageButton
+                            android:id="@+id/btnSendParamHelp"
+                            android:layout_width="36dp"
+                            android:layout_height="36dp"
+                            android:background="?attr/selectableItemBackgroundBorderless"
+                            android:contentDescription="参数说明"
+                            android:src="@drawable/ic_info"
+                            android:tint="@color/muted" />
+                    </LinearLayout>
 
                     <!-- 参数行 1：码制 / 帧率（ExposedDropdownMenu） -->
                     <LinearLayout

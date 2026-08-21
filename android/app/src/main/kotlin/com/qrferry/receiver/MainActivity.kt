@@ -141,6 +141,8 @@ class MainActivity : AppCompatActivity() {
         binding.subtitleText.text = "光学二维码摆渡 · v${BuildConfig.VERSION_NAME}"
 
         setupSendUi()
+        binding.btnHelp.setOnClickListener { showHelp() }
+        binding.btnSendParamHelp.setOnClickListener { showParamHelp() }
         binding.btnReset.setOnClickListener { reset() }
         binding.btnPause.setOnClickListener { togglePause() }
         binding.btnModeSend.setOnClickListener { showSendMode(true) }
@@ -155,6 +157,48 @@ class MainActivity : AppCompatActivity() {
         } else {
             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
+    }
+
+    /** 标题栏「?」按钮：弹窗展示普通用户向的简明使用说明。 */
+    private fun showHelp() {
+        AlertDialog.Builder(this)
+            .setTitle("使用说明 · qr-ferry")
+            .setMessage(
+                "一、发送（屏幕显示二维码，另一端扫码接收）\n" +
+                    "1. 选「文件」或「文本」，准备好内容；\n" +
+                    "2. 点「开始发送」，手机屏幕显示二维码；\n" +
+                    "3. 另一端（电脑或手机）的摄像头对准扫码即可，发送中可随时停止。\n\n" +
+                    "二、接收（用摄像头扫描另一端屏幕）\n" +
+                    "1. 切到「接收」页，把手机摄像头对准另一端屏幕；\n" +
+                    "2. 保持 15~30cm 距离，让二维码在画面内清晰对焦；\n" +
+                    "3. 完成后文本可直接复制，文件点「保存文件」选择位置。\n\n" +
+                    "三、小提示\n" +
+                    "· 设备不限：电脑与电脑、手机与手机、电脑与手机都可以互传；\n" +
+                    "· 二维码与摄像头保持 15~30cm，光线均匀、对焦清晰成功率最高；\n" +
+                    "· 发送较慢时调低帧率（如 8 FPS）更稳，调高帧率（如 24/30）更快；\n" +
+                    "· 摄像头分辨率较低、识别不稳时，把帧长调低（如 700B）更容易识别；\n" +
+                    "· 传输中断可重新点「开始发送/接收」，已收到的部分会自动续传；\n" +
+                    "· 发送时屏幕会保持常亮，结束后自动恢复。"
+            )
+            .setPositiveButton("知道了", null)
+            .show()
+    }
+
+    /** 参数区叹号：集中说明各参数含义（普通用户向）。 */
+    private fun showParamHelp() {
+        AlertDialog.Builder(this)
+            .setTitle("参数说明")
+            .setMessage(
+                "码制：标准 QR 兼容性最好、推荐使用；彩色码是实验功能，需要接收端也选「彩色码」。\n\n" +
+                    "帧率：每秒显示多少张二维码。越高传得越快，但码切换太快容易扫不准；" +
+                    "扫不稳时调低（如 8 FPS）更稳。\n\n" +
+                    "帧长：每张二维码携带的数据量。摄像头分辨率低、扫不清时选 700B 更易识别；" +
+                    "设备好可选 1200/2200B 传得更快。\n\n" +
+                    "纠错：二维码的容错等级。越高越耐遮挡、模糊，但码点更密、更难扫；" +
+                    "一般用 L 或 M 即可。"
+            )
+            .setPositiveButton("知道了", null)
+            .show()
     }
 
     private fun setupSendUi() {
@@ -258,8 +302,9 @@ class MainActivity : AppCompatActivity() {
         val ready = if (isFileMode()) selectedFile != null else !binding.sendTextInput.text.isNullOrBlank()
         binding.btnStartSend.isEnabled = ready
         binding.btnStartSendText.isEnabled = ready
-        binding.sendStatusText.text = when {
-            sending -> binding.sendStatusText.text
+        // 就绪提示与文件状态同行（sendReadyHint 右侧）；sendStatusText 仅承载发送中/结果状态
+        binding.sendReadyHint.text = when {
+            sending -> binding.sendReadyHint.text
             ready -> "准备发送"
             isFileMode() -> "选择文件后可开始发送"
             else -> "输入文本后可开始发送"
@@ -711,11 +756,11 @@ class MainActivity : AppCompatActivity() {
         when (result) {
             is ReceivePipeline.Result.Text -> {
                 pendingReceivedFile = null
-                sb.append("[TEXT]\n").append(result.text)
                 binding.resultText.setText(result.text)
                 binding.btnCopyResult.visibility = View.VISIBLE
                 binding.btnSaveResult.visibility = View.GONE
-                setStatus(sb.toString())
+                // 状态框（黑底）只展示摘要，不重复完整文本内容（内容见 resultText 文本框）
+                setStatus("✅ 接收完成 · 文本（${result.text.length} 字符）\nSHA-256: ${if (result.shaOk) "通过 ✓" else "失败 ✗"}")
             }
             is ReceivePipeline.Result.File -> {
                 pendingReceivedFile = result
@@ -768,7 +813,8 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "qr-ferry-recv"
-        private val FPS_OPTIONS = listOf(5, 8, 10, 12, 15, 18, 20, 24, 30)
+        // 帧率档位（精简为 5 档：低帧率稳、高帧率快，中档 10/15/18/20 与相邻档差异不明显）
+        private val FPS_OPTIONS = listOf(5, 8, 12, 24, 30)
         private const val DEFAULT_FPS = 8
         private val FRAME_BYTES_OPTIONS = listOf(700, 1200, 2200)
     }
