@@ -62,17 +62,17 @@
         android:orientation="vertical"
         android:visibility="gone">
 
-        <!-- 二维码显示区：MaterialCardView 卡片（18dp 圆角）。
-             高度与下方控制卡 1:1 权重分配：软键盘弹出（adjustResize）时两者按比例压缩，
-             控制卡（含文本框）保持可见，不会因固定高度被挤没。 -->
+        <!-- 二维码显示区：无边框卡片（码体更大）。高度与下方控制卡 1:1 权重分配：
+             软键盘弹出（adjustResize）时两者按比例压缩，控制卡（含文本框）保持可见。 -->
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_marginBottom="16dp"
             android:layout_weight="1"
             app:cardBackgroundColor="@color/surface_muted"
-            app:cardCornerRadius="18dp"
-            app:cardElevation="1dp">
+            app:cardCornerRadius="12dp"
+            app:cardElevation="0dp"
+            app:strokeWidth="0dp">
 
             <FrameLayout
                 android:id="@+id/codeStage"
@@ -83,7 +83,7 @@
                     android:id="@+id/sendCodeView"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
-                    android:layout_margin="6dp"
+                    android:layout_margin="2dp"
                     android:adjustViewBounds="true"
                     android:contentDescription="发送码显示区"
                     android:scaleType="fitCenter" />
@@ -300,6 +300,17 @@
                             app:cornerRadius="12dp"
                             android:text="开始发送" />
                     </LinearLayout>
+
+                    <!-- 全屏展示：勾选后发送期间 QR 显示在全屏黑色遮罩中（码体更大，可离更远扫描） -->
+                    <com.google.android.material.checkbox.MaterialCheckBox
+                        android:id="@+id/sendFullscreenCheck"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:checked="true"
+                        android:text="全屏展示（遮罩层）"
+                        android:textColor="@color/ink"
+                        android:textSize="13sp" />
 
                     <!-- 参数行 1：码制 / 帧率（ExposedDropdownMenu） -->
                     <LinearLayout

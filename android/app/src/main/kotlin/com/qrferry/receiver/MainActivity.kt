@@ -2,6 +2,7 @@ package com.qrferry.receiver
 
 import android.Manifest
 import android.app.Activity
+import android.app.Dialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -24,6 +25,7 @@ import android.view.inputmethod.InputMethodManager
 import android.webkit.MimeTypeMap
 import android.graphics.drawable.BitmapDrawable
 import android.widget.ArrayAdapter
+import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
@@ -76,6 +78,9 @@ class MainActivity : AppCompatActivity() {
     private var optimizePending = false                     // 优化期间又有新选择 → 完成后重跑最新
     private var sending = false
     private var previousScreenBrightness: Float? = null
+    // 全屏遮罩（发送「全屏展示」勾选时使用）：黑底 Dialog + 大 QR，点击/返回可退出（发送继续）
+    private var fullscreenDialog: Dialog? = null
+    private var fullscreenCodeView: ImageView? = null
     // 发送节拍（启动发送时快照，避免后台线程读 UI 状态）
     private var nextSendDeadline = 0L
     private var sendPeriodMs = 125L
@@ -353,10 +358,12 @@ class MainActivity : AppCompatActivity() {
             binding.btnClearSend.isEnabled = false
             binding.btnClearSendText.isEnabled = false
             binding.sendOptimizeCheck.isEnabled = false
+            binding.sendFullscreenCheck.isEnabled = false
             binding.btnStartSend.text = "停止发送"
             binding.btnStartSendText.text = "停止发送"
             binding.sendPlaceholder.visibility = View.GONE
             binding.sendStatusText.text = "发送中：K=${sendController?.K}，${selectedFps()} FPS"
+            showFullscreenOverlayIfEnabled()
             // 节拍锚定：渲染耗时不再叠加到标称间隔上；渲染慢于周期时自然顺延（不追赶连发）
             sendIsColor = isColorSend()
             sendEcLevel = selectedEcLevel()
@@ -384,9 +391,9 @@ class MainActivity : AppCompatActivity() {
                 val status = "发送中：K=${ctrl.K} sid=${ctrl.sessionId} next=${ctrl.nextSymbolId} raw=${ctrl.rawSize}B"
                 mainHandler.post {
                     if (!sending) return@post
-                    binding.sendCodeView.setImageDrawable(
-                        BitmapDrawable(resources, bitmap).apply { isFilterBitmap = false }
-                    )
+                    val drawable = BitmapDrawable(resources, bitmap).apply { isFilterBitmap = false }
+                    binding.sendCodeView.setImageDrawable(drawable)
+                    fullscreenCodeView?.setImageDrawable(drawable)   // 全屏遮罩同步（若可见）
                     binding.sendStatusText.text = status
                 }
                 nextSendDeadline = maxOf(nextSendDeadline + sendPeriodMs, SystemClock.uptimeMillis())
@@ -414,6 +421,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun stopSending(message: String) {
         sending = false
+        closeFullscreenOverlay()
         previousScreenBrightness?.let { brightness ->
             window.attributes = window.attributes.apply { screenBrightness = brightness }
         }
@@ -432,9 +440,44 @@ class MainActivity : AppCompatActivity() {
         binding.btnClearSend.isEnabled = true
         binding.btnClearSendText.isEnabled = true
         binding.sendOptimizeCheck.isEnabled = true
+        binding.sendFullscreenCheck.isEnabled = true
         binding.sendStatusText.text = message
         refreshSendTypeUi()
         refreshSendEnabled()
+    }
+
+    // ────────────── 全屏遮罩（发送「全屏展示」勾选时）──────────────
+    /** 勾选「全屏展示」且正在发送时：弹出全屏黑底遮罩，QR 码体最大化显示。 */
+    private fun showFullscreenOverlayIfEnabled() {
+        if (!binding.sendFullscreenCheck.isChecked) return
+        if (fullscreenDialog != null) return
+        val dialog = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        dialog.window?.addFlags(
+            WindowManager.LayoutParams.FLAG_FULLSCREEN or
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+        )
+        val codeView = ImageView(this).apply {
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setBackgroundColor(android.graphics.Color.BLACK)
+        }
+        dialog.setContentView(codeView)
+        // 点击遮罩任意处 → 退出遮罩（发送继续，主界面 QR 仍实时显示）
+        codeView.setOnClickListener { dialog.dismiss() }
+        dialog.setOnDismissListener { fullscreenDialog = null; fullscreenCodeView = null }
+        fullscreenDialog = dialog
+        fullscreenCodeView = codeView
+        // 先铺一帧（发送 tick 已有最新帧时同步更新）
+        binding.sendCodeView.drawable?.let { codeView.setImageDrawable(it) }
+        dialog.show()
+    }
+
+    /** 关闭全屏遮罩（停止发送/页面销毁时调用；点击遮罩退出走 setOnDismissListener 清理）。 */
+    private fun closeFullscreenOverlay() {
+        fullscreenDialog?.dismiss()
+        fullscreenDialog = null
+        fullscreenCodeView = null
     }
 
     private fun isColorSend(): Boolean = codecPosition == 1
