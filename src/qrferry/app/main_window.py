@@ -461,11 +461,6 @@ class MainWindow(QMainWindow):
         self._drag_off = None          # 顶栏拖拽偏移（None=未在拖拽）
         self._resize_edge = None       # 边缘缩放方向（'n','s','e','w' 组合；None=未缩放）
         self._resize_start = None      # 缩放起点 (起始 geometry, 起始全局坐标)
-        # 全屏遮罩窗口（发送「全屏展示」勾选时使用）：须在 _build_ui 之前初始化，
-        # eventFilter 在构建窗口控制按钮时即可能被触发。
-        self._fullscreen_overlay: QWidget | None = None
-        self._fs_label: QLabel | None = None
-        self._fs_pix: QPixmap | None = None
         # 手动最大化：Qt 6.8/Windows 上无边框窗口调用 showMaximized() 会落到
         # WindowFullScreen 状态（isMaximized() 恒 False），导致「最大化后要连点两次
         # 才还原」——用自家标志位 + 保存的普通几何，不依赖原生窗口状态机；
@@ -639,7 +634,7 @@ class MainWindow(QMainWindow):
         qr_bg = "#1E293B" if self._dark else "#FFFFFF"      # QR 区：浅色白、深色卡片深（QR 图自带白底居中显示）
         cam_bg = "#1E293B" if self._dark else "#E2E8F0"     # 预览区：浅色浅灰、深色深
         self._qr_label.setStyleSheet(
-            f"background:{qr_bg}; border:none; border-radius:16px; color:{sub_txt};")
+            f"background:{qr_bg}; border:1px solid {border}; border-radius:20px; color:{sub_txt};")
         self._cam_label.setStyleSheet(
             f"background:{cam_bg}; border:1px solid {border}; border-radius:20px; color:{sub_txt};")
         # QTextEdit viewport 背景随主题（QSS background 对 viewport 有时不生效）
@@ -971,11 +966,6 @@ class MainWindow(QMainWindow):
         self._s_start.toggled.connect(self._toggle_send)
         self._s_start.setMinimumHeight(46)
         left.addWidget(self._s_start)
-        # 全屏展示：勾选后发送期间 QR 显示在独立全屏遮罩窗口中（更大、更远可扫）
-        self._s_fullscreen = QCheckBox("全屏展示（遮罩层）")
-        self._s_fullscreen.setChecked(True)   # 默认开启：首屏即获得最大扫码空间
-        self._s_fullscreen.setToolTip("发送时在全屏黑色遮罩中显示二维码，码体更大，手机可离更远扫描")
-        left.addWidget(self._s_fullscreen)
         left.addStretch(1)
         lay.addWidget(left_w)
 
@@ -983,8 +973,8 @@ class MainWindow(QMainWindow):
         right_w = QFrame()
         right_w.setObjectName("card")
         right = QVBoxLayout(right_w)
-        right.setContentsMargins(12, 12, 12, 12)
-        right.setSpacing(10)
+        right.setContentsMargins(20, 16, 20, 18)
+        right.setSpacing(14)
         head = QHBoxLayout()
         title = QLabel("发送预览")
         title.setStyleSheet("font-size:15px; font-weight:700;")
@@ -996,7 +986,7 @@ class MainWindow(QMainWindow):
         right.addLayout(head)
         self._qr_label = QLabel("（待发送）")
         self._qr_label.setAlignment(Qt.AlignCenter)
-        self._qr_label.setMinimumSize(480, 480)
+        self._qr_label.setMinimumSize(400, 400)
         right.addWidget(self._qr_label, 1)
         lay.addWidget(right_w, 1)
         return tab
@@ -1203,16 +1193,6 @@ class MainWindow(QMainWindow):
         from PySide6.QtCore import QEvent
 
         t = event.type()
-        # 全屏遮罩：ESC 键退出；点击遮罩/QR 任意处退出；resize 时重铺 QR
-        if obj is self._fullscreen_overlay or obj is self._fs_label:
-            if t == QEvent.KeyPress and event.key() == Qt.Key_Escape:
-                self._close_fullscreen_overlay()
-                return True
-            if t == QEvent.MouseButtonPress:
-                self._close_fullscreen_overlay()
-                return True
-            if t == QEvent.Resize or t == QEvent.Show:
-                self._refresh_fullscreen_pix()
         # 窗口控制按钮 hover 高亮：关闭按钮悬停时图标换白（红底上清晰），其余换主色
         if obj is self._win_min or obj is self._win_max or obj is self._win_close:
             if t == QEvent.HoverEnter:
@@ -1549,7 +1529,6 @@ class MainWindow(QMainWindow):
                 pass
             self.statusBar().showMessage(
                 f"恢复发送：会话 {resumed.session_id}，从 symbol_id={resumed.next_sid} 继续（K={resumed.K}）")
-            self._show_fullscreen_overlay()
             return
         if self._s_file.isChecked():
             if not self._file_path or not os.path.isfile(self._file_path):
@@ -1618,7 +1597,6 @@ class MainWindow(QMainWindow):
             session_store.save_sender(self._send_ctrl, _SENDER_STATE_DIR)
         except OSError:
             pass
-        self._show_fullscreen_overlay()
 
     def _stop_send(self):
         self._send_timer.stop()
@@ -1628,56 +1606,6 @@ class MainWindow(QMainWindow):
         self._update_running_icons()
         self._s_badge.setText("待发送")
         self._send_start_ts = None   # 重置速率统计，下次发送重新计时
-        self._close_fullscreen_overlay()
-
-    # ────────────── 全屏遮罩（发送「全屏展示」勾选时）──────────────
-    def _ensure_fullscreen_overlay(self) -> None:
-        """懒创建全屏遮罩窗口：无边框、纯黑底、居中大 QR，ESC/点击退出。"""
-        if self._fullscreen_overlay is not None:
-            return
-        ov = QWidget(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-        ov.setStyleSheet("background:#000000;")
-        ov.setAttribute(Qt.WA_DeleteOnClose, False)
-        fs = QVBoxLayout(ov)
-        fs.setContentsMargins(24, 24, 24, 24)
-        self._fs_label = QLabel(ov)
-        self._fs_label.setAlignment(Qt.AlignCenter)
-        self._fs_label.setStyleSheet("background:transparent;")
-        fs.addWidget(self._fs_label)
-        hint = QLabel("点击任意处或按 ESC 退出全屏", ov)
-        hint.setAlignment(Qt.AlignCenter)
-        hint.setStyleSheet("color:#94A3B8; font-size:13px; background:transparent;")
-        fs.addWidget(hint)
-        self._fullscreen_overlay = ov
-        ov.installEventFilter(self)          # 复用 eventFilter：点击/ESC 退出
-        self._fs_label.installEventFilter(self)   # label 覆盖大部分区域，点击也走同一出口
-
-    def _show_fullscreen_overlay(self) -> None:
-        """发送启动且勾选「全屏展示」时：显示全屏遮罩，QR 立即铺满。"""
-        if not getattr(self, "_s_fullscreen", None) or not self._s_fullscreen.isChecked():
-            return
-        self._ensure_fullscreen_overlay()
-        self._fullscreen_overlay.showFullScreen()
-        self._fullscreen_overlay.setFocus(Qt.OtherFocusReason)   # 让 ESC 键直达遮罩
-        self._fs_label.raise_()
-        self._refresh_fullscreen_pix()
-
-    def _refresh_fullscreen_pix(self) -> None:
-        """把当前发送预览的 QR 图按遮罩窗口大小等比放大刷新（保持最近邻锐利）。"""
-        if self._fullscreen_overlay is None or not self._fullscreen_overlay.isVisible():
-            return
-        pix = self._fs_pix
-        if pix is None or pix.isNull():
-            return
-        size = self._fs_label.size()
-        if size.width() <= 0 or size.height() <= 0:
-            return
-        self._fs_label.setPixmap(pix.scaled(size, Qt.KeepAspectRatio, Qt.FastTransformation))
-
-    def _close_fullscreen_overlay(self) -> None:
-        """停止发送/退出全屏：隐藏遮罩（保留对象，下次复用）。"""
-        if self._fullscreen_overlay is not None and self._fullscreen_overlay.isVisible():
-            self._fullscreen_overlay.hide()
 
     def _resend(self):
         """人工补发：从当前游标追加 N 个新 DATA 符号（LT 喷泉码靠新符号补缺块，非重发旧帧）。"""
@@ -1719,9 +1647,6 @@ class MainWindow(QMainWindow):
         # QR 是离散黑白模块矩阵，必须最近邻（Fast）保留方块锐利；双线性（Smooth）会在模块
         # 边缘产生灰色过渡，高密度帧（zip 满载）缩放后易致接收端 zxing 误读 → 重组数据损坏。
         self._qr_label.setPixmap(pix.scaled(self._qr_label.size(), Qt.KeepAspectRatio, Qt.FastTransformation))
-        # 全屏遮罩同步：缓存原始像素图，遮罩可见时按窗口大小刷新
-        self._fs_pix = pix
-        self._refresh_fullscreen_pix()
         # 发送速率统计（懒初始化：兼容 _start_send / _resend 两入口）
         if self._send_start_ts is None:
             self._send_start_ts = time.monotonic()

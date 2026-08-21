@@ -18,8 +18,7 @@ from qrferry.app import main_window as mw
 
 def main() -> None:
     app = QApplication.instance() or QApplication([])
-    # 打桩摄像头探测：截图脚本不触碰真实设备（新代码先走 fresh 子进程探测）
-    mw.probe_available_cameras_fresh = lambda max_index=9: []
+    # 打桩摄像头探测：截图脚本不触碰真实设备
     mw.probe_available_cameras = lambda max_index=9: []
     out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "output", "ui")
     os.makedirs(out_dir, exist_ok=True)
