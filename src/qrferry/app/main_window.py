@@ -205,6 +205,13 @@ _ICON_SVGS = {
     "moon": '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
             'stroke="{color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
             '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>',
+    "help": '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
+            'stroke="{color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+            '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>'
+            '<path d="M12 17h.01"/></svg>',
+    "info": '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
+            'stroke="{color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+            '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>',
     "camera": '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
               'stroke="{color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
               '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>'
@@ -615,6 +622,44 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001, S110 — 圆角是装饰性增强，失败静默回退直角
             pass
 
+    # ────────────── 使用说明 ──────────────
+    def _show_help(self):
+        """顶栏「?」按钮：弹窗展示普通用户向的简明使用说明。"""
+        QMessageBox.information(
+            self, "使用说明 · qr-ferry",
+            "<b>一、发送（屏幕显示二维码，另一端扫码接收）</b><br>"
+            "1. 选「文件」或「文本」，准备好内容；<br>"
+            "2. 点「开始发送」，屏幕显示二维码；<br>"
+            "3. 另一端（电脑或手机）的摄像头对准扫码即可，发送中可随时停止。<br><br>"
+            "<b>二、接收（用摄像头扫描另一端屏幕）</b><br>"
+            "1. 切到「接收」页，确认摄像头已选好，能正常看到画面；<br>"
+            "2. 让另一端屏幕的二维码对准摄像头，保持 15~30cm；<br>"
+            "3. 完成后文本可直接复制，文件点「保存文件」选择位置。<br><br>"
+            "<b>三、小提示</b><br>"
+            "· 设备不限：电脑与电脑、手机与手机、电脑与手机都可以互传；<br>"
+            "· 二维码与摄像头保持 15~30cm，对焦清晰、光线均匀成功率最高；<br>"
+            "· 发送较慢时调低帧率（如 8 FPS）更稳，调高帧率（如 24/30）更快；<br>"
+            "· 摄像头分辨率较低、识别不稳时，把帧长调低（如 700B）更容易识别；<br>"
+            "· 传输中断可重新点「开始发送/接收」，已收到的部分会自动续传；<br>"
+            "· 关闭窗口会最小化到托盘，右键托盘图标可「退出」。")
+
+    def _show_param_help(self):
+        """参数区叹号：弹窗集中说明各参数含义（普通用户向）。"""
+        QMessageBox.information(
+            self, "参数说明",
+            "<b>帧率</b>：每秒显示多少张二维码。越高传得越快，但码切换太快容易扫不准；"
+            "扫不稳时调低（如 8 FPS）更稳。<br><br>"
+            "<b>码制</b>：标准 QR 兼容性最好、推荐使用；彩色码是实验功能，"
+            "需要接收端也选「彩色码」。<br><br>"
+            "<b>纠错</b>：二维码的容错等级。越高越耐遮挡、模糊，但码点更密、更难扫；"
+            "一般用 L 或 M 即可。<br><br>"
+            "<b>帧长</b>：每张二维码携带的数据量。摄像头分辨率低、扫不清时选 700B 更易识别；"
+            "设备好可选 1200/2200B 传得更快。<br><br>"
+            "<b>冗余</b>：发送时额外多发的纠错数据比例。越高越抗丢帧、传输更稳，但更慢；"
+            "链路稳定时 1.2~1.5 即可。<br><br>"
+            "<b>网格</b>：一屏显示几个二维码。2×2/3×3 一屏数据更多、更快，但每个码更小，"
+            "需要接收端离得近一些。")
+
     # ────────────── 主题 ──────────────
     def _apply_theme(self):
         import tempfile
@@ -653,6 +698,12 @@ class MainWindow(QMainWindow):
             name = "sun" if self._dark else "moon"
             self._theme_btn.setIcon(_svg_icon(_ICON_SVGS[name], sub, 18))
             self._theme_btn.setIconSize(QSize(18, 18))
+        if hasattr(self, "_help_btn"):
+            self._help_btn.setIcon(_svg_icon(_ICON_SVGS["help"], sub, 18))
+            self._help_btn.setIconSize(QSize(18, 18))
+        if hasattr(self, "_param_help_btn"):
+            self._param_help_btn.setIcon(_svg_icon(_ICON_SVGS["info"], sub, 15))
+            self._param_help_btn.setIconSize(QSize(15, 15))
         # 窗口控制按钮：常态用前景色（清晰可辨），hover 高亮由 eventFilter 切换
         if hasattr(self, "_win_min"):
             self._win_min.setIcon(_svg_icon(_ICON_SVGS["winmin"], fg, 14))
@@ -744,6 +795,16 @@ class MainWindow(QMainWindow):
         seg_lay.addWidget(self._tab_recv)
         tbar.addWidget(tabseg)
         tbar.addStretch(1)
+
+        # 使用说明按钮（顶栏右侧、主题按钮左侧）：弹窗展示普通用户向的简明说明
+        self._help_btn = QPushButton()
+        self._help_btn.setObjectName("themeBtn")
+        self._help_btn.setCursor(Qt.PointingHandCursor)
+        self._help_btn.setToolTip("使用说明")
+        self._help_btn.setIcon(_svg_icon(_ICON_SVGS["help"], "#64748B", 18))
+        self._help_btn.setIconSize(QSize(18, 18))
+        self._help_btn.clicked.connect(self._show_help)
+        tbar.addWidget(self._help_btn)
 
         # 主题切换按钮（顶栏右侧，SVG 图标）
         self._theme_btn = QPushButton()
@@ -909,7 +970,27 @@ class MainWindow(QMainWindow):
 
         hsep = QFrame(); hsep.setObjectName("hsep"); left.addWidget(hsep)
 
-        left.addWidget(section("参数"))
+        # 「参数」标题行：右侧叹号按钮，集中查看全部参数说明（悬浮/点击均可）
+        param_head = QHBoxLayout()
+        param_head.addWidget(section("参数"))
+        param_head.addStretch(1)
+        self._param_help_btn = QPushButton()
+        self._param_help_btn.setObjectName("themeBtn")
+        self._param_help_btn.setCursor(Qt.PointingHandCursor)
+        self._param_help_btn.setIcon(_svg_icon(_ICON_SVGS["info"], "#64748B", 15))
+        self._param_help_btn.setIconSize(QSize(15, 15))
+        self._param_help_btn.setToolTip(
+            "查看各参数含义（点击查看完整说明）\n"
+            "· 帧率：每秒显示的码数，越高越快、越低越稳\n"
+            "· 码制：标准 QR 兼容最好；彩色码为实验功能\n"
+            "· 纠错：越高越耐遮挡模糊，但码更密\n"
+            "· 帧长：单码数据量，设备差选 700 更易识别\n"
+            "· 冗余：越高越抗丢帧，但更慢\n"
+            "· 网格：一屏码数，越大越快但码更小")
+        self._param_help_btn.clicked.connect(self._show_param_help)
+        param_head.addWidget(self._param_help_btn)
+        left.addLayout(param_head)
+
         # 参数区两列网格：卡片加宽 + 标签收窄 + 列间距加大，保证下拉框文字完整显示
         # （"标准QR（推荐）" 等长项不再被截断），且右侧参数名称与左侧控件拉开距离。
         param_specs = (
