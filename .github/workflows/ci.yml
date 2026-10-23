@@ -131,11 +131,13 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt   # 已含 pyinstaller==6.21.0
-          # 打包用 headless opencv 省体积（qrferry 仅用采集/处理，不用 imshow/waitKey）。
-          # 注意：这是相对 requirements.txt 的**有意偏离**——headless 与 full 是
-          # 不同构建的 cv2 二进制，而 requirements.txt 记录过「同版本号不同构建导致
-          # 目标机摄像头枚举行为/耗时变化」的教训。发版前须在真机上复核一次摄像头
-          # 枚举与采集，不能只信本地（本地是 full 构建）跑通。
+          # 打包用 headless opencv（qrferry 只用 videoio/imgproc，不用 imshow/waitKey）。
+          # 实测：opencv-python 5.0.0.93 的 full 与 headless 装出的 cv2.pyd 二进制
+          # 完全相同（sha256[:16]=eefedf6ee006a84b，即 requirements.txt 记的指纹），
+          # 所以这步对 cv2 行为无影响，只省掉少量 GUI 依赖。
+          # 真正与本地不同源的是 Python 补丁版本：CI 的 setup-python 取到最新的
+          # 3.12.x，本地 .venv 是 3.12.7（实测线上包内 python312.dll=3.12.10）。
+          # 版本要严格一致时，把 venv 补到与 CI 相同的补丁版本再比对。
       # 打包参数统一由 qr-ferry.spec 持有（本地与 CI 同一条命令），避免两处
       # exclude 清单各改各的而悄悄漂移。
       - name: Build with PyInstaller
