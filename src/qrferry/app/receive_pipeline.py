@@ -25,7 +25,18 @@ from qrferry.core.lt import expected_overhead
 from qrferry.core.session import ReceiveSession
 from qrferry.qr.backend import CodecBackend, StandardQrBackend
 
-__all__ = ["ReceivePipeline", "ReceiveResult", "safe_filename"]
+__all__ = ["ReceivePipeline", "ReceiveResult", "SessionCorruptError", "safe_filename"]
+
+# 续传快照落盘的最小间隔（秒）：快照含全部已恢复块，大文件单次写入可达数十毫秒
+_PERSIST_MIN_SECONDS = 2.0
+
+
+class SessionCorruptError(ValueError):
+    """会话级数据损坏（SHA-256 校验失败）：重试无意义，调用方应停机报错。
+
+    与帧级错误区分：单帧坏 payload 由 ingest 静默丢弃，不会走到这里；
+    只有「已收齐但校验不过」才说明链路/存储出了真问题。
+    """
 
 
 @dataclass
@@ -61,6 +72,7 @@ class ReceivePipeline:
         self.result: ReceiveResult | None = None
         self._persist = persist
         self._ingested_since_save = 0
+        self._last_save_ts = 0.0
         self.first_valid_frame_ts: float | None = None
         self.valid_frames = 0          # 有效帧数（CRC 通过并入会话）
         self.bad_frames = 0            # 丢弃帧数（CRC 失败/解析失败）
@@ -79,6 +91,26 @@ class ReceivePipeline:
     @property
     def progress(self) -> float:
         return self.session.progress
+
+    def _reset_transfer_stats(self) -> None:
+        """会话切换（新一批码）时把「本次传输」的计时/速率统计清零。
+
+        只重置与**单次传输时长/速率**相关的量；missed_images / bad_frames 是整条
+        链路的累计健康度，跨会话保留更有诊断价值（用户看的是「这台设备识别率如何」）。
+        """
+        self.first_valid_frame_ts = None
+        self.valid_frames = 0
+        self.valid_data_frames = 0
+        self.total_valid_bytes = 0
+        self._samples.clear()
+        self._start_resolved = 0
+        self._last_decoder = self.session._decoder
+        self._ingested_since_save = 0
+        self._last_save_ts = 0.0
+        # 上一个文件已完成后又来了新一批码：结果与完成标志必须复位，否则新文件
+        # 永远不会再次触发「接收完成」（UI 会一直显示上一份结果）。
+        self.result = None
+        self._finalized = False
 
     @property
     def missing_indices(self) -> list[int]:
@@ -203,6 +235,7 @@ class ReceivePipeline:
     def process_image(self, image) -> int:
         """解码图像中所有 QR，有效帧（CRC 通过）入会话；返回本帧有效帧数。"""
         added = 0
+        session_before = self.session.session_id
         decoded = self.backend.decode(image)
         if not decoded:
             self.missed_images += 1
@@ -213,6 +246,12 @@ class ReceivePipeline:
                 self.bad_frames += 1   # CRC 失败/坏帧：丢弃但计数
                 continue
             effective = self.session.ingest(header, payload)
+            # 会话切换（收到不同 session_id 的 MANIFEST）→ 这是一次全新的文件传输。
+            # 进度条已由 session 归零，计时/速率基准必须同步归零，否则「已用」会把
+            # 上一批的耗时累加进来（表现为：进度回到 0%，时间却接着往上走）。
+            if self.session.session_id != session_before:
+                session_before = self.session.session_id
+                self._reset_transfer_stats()
             # 链路统计（link_bps 样本）：CRC 通过且会话已建立的 DATA 帧都算搬运量，
             # 含重复符号（重复也消耗带宽）——与 effective 无关，保持原语义。
             if header.frame_type == FrameType.DATA and self.session.manifest is not None:
@@ -233,10 +272,18 @@ class ReceivePipeline:
         return added
 
     def _maybe_save(self, added: int) -> None:
-        """节流持久化：每累计 16 个有效帧存一次，避免每帧 IO。"""
+        """节流持久化：至少 16 个有效帧、且距上次落盘 ≥2 秒才写一次。
+
+        快照要把所有已恢复块 base64 编码后写 JSON（5MB 会话单次实测 57ms），旧实现
+        每 16 帧一次，在高帧率下会在解码线程里周期性制造几十毫秒卡顿。加时间下限后
+        大文件会话降至每 2 秒一次，续传粒度仍是"最多丢约 2 秒的进度"。
+        """
         self._ingested_since_save += added
-        if self._ingested_since_save >= 16:
+        now = time.monotonic()
+        if (self._ingested_since_save >= 16
+                and now - self._last_save_ts >= _PERSIST_MIN_SECONDS):
             self._ingested_since_save = 0
+            self._last_save_ts = now
             session_store.save(self.session, self.save_dir)
 
     def _finalize(self) -> None:
@@ -244,7 +291,7 @@ class ReceivePipeline:
         encoded = self.session.reassemble()
         data = decompress(m.compression, encoded)
         if hashlib.sha256(data).digest() != m.raw_sha256:
-            raise ValueError("SHA-256 校验失败：数据损坏")
+            raise SessionCorruptError("SHA-256 校验失败：数据损坏")
         self.result = ReceiveResult(
             m.content_type,
             m.filename if m.content_type == ContentType.FILE else "",

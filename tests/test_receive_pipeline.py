@@ -24,6 +24,63 @@ def _drive(sender: SendController, pipe: ReceivePipeline) -> None:
             break
 
 
+def test_new_session_resets_elapsed_time_not_accumulated():
+    """接收中途来了新一批码（不同 session_id）：进度归零时「已用」也必须归零。
+
+    回归背景：用户不点停止直接换下一批码时，进度条回到 0% 但「已用」接着累计，
+    显示成「一个 3 秒的文件用了 40 秒」，时长/速率全部失真。
+    """
+    import time as _t
+
+    backend = StandardQrBackend()
+    pipe = ReceivePipeline(backend=backend, persist=False)
+
+    # 第一次传输：跑一部分帧，让计时基准建立
+    s1 = SendController(_rand(3000, 1), ContentType.FILE, "a.bin", session_id=101,
+                        config=SenderConfig(chunk_size_log=6, redundancy=2.0, rounds=2))
+    it1 = iter(s1)
+    for _ in range(3):
+        pipe.process_image(backend.encode(next(it1)))
+    first_elapsed = pipe.elapsed_seconds
+    assert first_elapsed >= 0.0
+    _t.sleep(0.05)
+    assert pipe.elapsed_seconds > first_elapsed, "同一会话内时间应继续累计"
+
+    # 第二批码：不同 session_id → 全新传输
+    s2 = SendController(_rand(3000, 2), ContentType.FILE, "b.bin", session_id=202,
+                        config=SenderConfig(chunk_size_log=6, redundancy=2.0, rounds=2))
+    pipe.process_image(backend.encode(next(iter(s2))))
+
+    assert pipe.session.session_id == 202
+    assert pipe.elapsed_seconds < 0.05, f"换批后「已用」应重新计时，实际 {pipe.elapsed_seconds}"
+    assert pipe.valid_data_frames <= 1, "换批后有效帧计数应重置"
+
+
+def test_new_session_after_completion_can_complete_again():
+    """上一份文件已完成后又来新一批码：结果需复位，并且新文件能再次触发完成。"""
+    backend = StandardQrBackend()
+    pipe = ReceivePipeline(backend=backend, persist=False)
+
+    data1 = _rand(1200, 11)
+    _drive(SendController(data1, ContentType.FILE, "one.bin", session_id=1,
+                          config=SenderConfig(chunk_size_log=6, rounds=2)), pipe)
+    assert pipe.is_complete and pipe.result is not None
+    assert pipe.result.filename == "one.bin"
+
+    data2 = _rand(1500, 12)
+    _drive(SendController(data2, ContentType.FILE, "two.bin", session_id=2,
+                          config=SenderConfig(chunk_size_log=6, rounds=2)), pipe)
+    assert pipe.is_complete
+    assert pipe.result is not None and pipe.result.filename == "two.bin", "应产出新文件结果"
+    assert pipe.result.data == data2
+
+
+def test_elapsed_seconds_starts_at_zero_before_first_frame():
+    """尚未收到任何有效帧时「已用」应为 0（而不是从管道创建时刻起算）。"""
+    pipe = ReceivePipeline(backend=StandardQrBackend(), persist=False)
+    assert pipe.elapsed_seconds == 0.0
+
+
 def test_pipeline_file_result_stays_in_memory_until_saved():
     data = _rand(3000, 7)
     sender = SendController(data, ContentType.FILE, "报告.pdf", session_id=42,
@@ -192,3 +249,23 @@ def test_pipeline_eta_none_below_threshold():
     manifest_f = next(f for f in frames if decode_frame(f)[0].frame_type == FrameType.MANIFEST)
     pipe.process_image(pipe.backend.encode(manifest_f))
     assert pipe.eta_seconds is None   # 仅 MANIFEST：unique=0 且 elapsed≈0
+
+
+def test_persist_snapshot_is_time_throttled(monkeypatch):
+    """续传快照：满 16 帧才写，且两次写入间隔不小于 2 秒（避免大文件周期性卡顿）。"""
+    from qrferry.app import receive_pipeline as rp
+
+    calls = []
+    monkeypatch.setattr(rp.session_store, "save", lambda *a, **k: calls.append(1))
+    pipe = rp.ReceivePipeline(persist=True, save_dir=".")
+    for _ in range(16):
+        pipe._maybe_save(1)
+    assert len(calls) == 1, "满 16 帧应落一次盘"
+    for _ in range(200):
+        pipe._maybe_save(1)
+    assert len(calls) == 1, "2 秒冷却内不得重复落盘"
+    # 冷却过后（伪造时间基准）应再次落盘
+    pipe._last_save_ts -= rp._PERSIST_MIN_SECONDS + 1
+    for _ in range(16):
+        pipe._maybe_save(1)
+    assert len(calls) == 2

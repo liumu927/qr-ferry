@@ -11,6 +11,7 @@ import random
 import sys
 import threading
 import time
+from collections import deque
 
 import cv2
 import numpy as np
@@ -56,7 +57,11 @@ from qrferry.app.camera_devices import (
 )
 from qrferry.app.compression import compression_name
 from qrferry.app.file_optimizer import optimize_file
-from qrferry.app.receive_pipeline import ReceivePipeline, safe_filename
+from qrferry.app.receive_pipeline import (
+    ReceivePipeline,
+    SessionCorruptError,
+    safe_filename,
+)
 from qrferry.app.send_controller import (
     COLOR_MATRIX_CHUNK_SIZE_LOG,
     COLOR_MATRIX_MAX_FRAME_BYTES,
@@ -69,12 +74,27 @@ from qrferry.core.session import ReceiveSession
 from qrferry.qr.backend import StandardQrBackend
 from qrferry.qr.color_matrix import ColorMatrixBackend
 
-# 采集请求宽度，也是解码降采样的回退目标：单一真相源。
-# 1280×720 已被验证为「解码足够快、QR 模块像素充足」的健康工作点（修复前一直在此尺寸直解）。
-# 仅当设备无视请求、实际输出宽度超过此值（如高拍仪强出 1080p=1920 宽）时，才降回此宽度——
-# 1080p 全图扫描成本 ~O(像素数)，降回 1280 提速 ~2.25x，且像素仍够 zxing 解码。
-# 阈值不可低于采集请求宽度，否则会误伤所有遵循请求的摄像头（每帧无谓 resize + 模块缩水）。
-_CAPTURE_WIDTH = 1280
+# 采集模式阶梯：分辨率优先。逐档 set 后回读校验，第一档协商不成就降到下一档。
+#
+# 拍屏识别率几乎只取决于「每个 QR 模块落进几个相机像素」，而模块数随帧长跳变：
+#   帧长  700B → 源块  512B → QR v18 →  89 模块
+#   帧长 1200B → 源块 1024B → QR v24 → 113 模块
+#   帧长 2200B → 源块 2048B → QR v35 → 157 模块
+# 手机屏 1080px 宽时，码体最多给到 6~12 屏像素/模块；摄像头再按画面占比（多数人
+# 对准时只占 30~50%）采样一次，1280 宽采集只剩 2.4~6.5 相机像素/模块——1200B/2200B
+# 就此掉到 zxing 的实际识别门槛以下。这正是「只有 700B 帧长才识别得了」的机理，
+# 不是手机屏幕小、也不是摄像头差：是接收端把可用像素丢掉了。
+# 1080p 采集直接给到 1.5 倍像素；解码实测 4.5ms/帧（223fps 余量，30fps 预算充裕）。
+_CAPTURE_MODES: tuple[tuple[int, int, int], ...] = (
+    (1920, 1080, 30),   # 首选：分辨率优先（每模块像素 ×1.5）
+    (1280, 720, 60),    # 720p 设备的最优解：60fps 强制曝光 ≤16.7ms，撕裂帧减半，
+                        # 且每张码的采集机会翻倍（详见下方 _FRAME_PERIOD 说明）
+    (1280, 720, 30),    # 回退：设备不支持 1080p / 60fps
+)
+
+# 解码图最大宽度：只用来挡住「远超需求的高分辨率设备」（如高拍仪强出 4K）。
+# 1080p 必须原样送解码——每降采样一次就少一份模块像素，直接换识别率。
+_DECODE_MAX_WIDTH = 1920
 
 # 采集鲁棒性参数（_capture_loop / _open_usable_camera / _run_capture_reads）：
 # - _OPEN_ATTEMPTS × _OPEN_PROBE_FRAMES：打开后实测「出非黑帧」的探测强度；
@@ -89,6 +109,74 @@ _OPEN_PROBE_INTERVAL = 0.08
 _BLACK_GRACE_SECONDS = 5.0
 _BLACK_CONTINUOUS_SECONDS = 3.0
 _READ_FAIL_LIMIT = 30
+
+# 线程容错参数：
+# - _DECODE_ERROR_LIMIT：连续「单帧解码异常」阈值。单帧异常（坏的帧格式/落盘 IO 抖动）
+#   只跳过不杀线程；连续失败到这个量级才判定为环境性问题并停机报错。
+# - _THREAD_RESTART_COOLDOWN：看门狗重启冷却。线程在这么短时间内再次死亡说明异常是
+#   确定性的，继续重启只会刷日志，升级为停机报错。
+# - _MAX_DECODE_RESTARTS：一次接收里允许自动重启解码线程的总次数。
+_DECODE_ERROR_LIMIT = 30
+_THREAD_RESTART_COOLDOWN = 2.0
+_MAX_DECODE_RESTARTS = 5
+
+# 帧率看门狗参数（_run_capture_reads / _open_usable_camera）：
+# 驱动偶发落入「1 帧/秒」状态：read() 返回 ok=True 但每次精确阻塞约 1000ms，
+# 且不会自愈（实测冷开 4/15；按 open→set×5→read 顺序 8/10 复现）。这种状态下
+# 解码仍以 1fps 推进，肉眼表现为「进度几乎不动、像卡死」，此前没有任何检测。
+# - _MIN_FPS / _LOW_FPS_SECONDS：近 3 秒实测帧率低于阈值并持续该时长 → 原地重开设备。
+# - _FPS_WARMUP_SECONDS：打开后前几秒不计（自动曝光/协商还在稳定，帧率天然偏低）。
+# - _REOPEN_ATTEMPTS：同一设备原地重开次数，用完仍低速则顺延下一候选。
+# - _SLOW_READ_SECONDS / _SLOW_READ_LIMIT：探测期连续慢读判据。1fps 状态下每次 read
+#   阻塞约 1s，8 帧探测要 8s+，必须在这一步就止损，否则"打开就很慢"。
+_MIN_FPS = 5.0
+_CRITICAL_FPS = 2.0      # 重开也救不回时，低于该值才停机；2~5fps 仅提示后继续（慢总比中断好）
+_LOW_FPS_SECONDS = 4.0
+_FPS_WARMUP_SECONDS = 2.0
+_REOPEN_ATTEMPTS = 2
+_SLOW_READ_SECONDS = 0.5
+_SLOW_READ_LIMIT = 3
+_FPS_SAMPLE_SIZE = 64    # 帧率滑动窗口样本数（1fps 时也够 60s，正常帧率下只有数秒）
+_FPS_MIN_SAMPLES = 4     # 样本少于该数不判帧率（避免刚打开时误报）
+
+# 识别失败样本留存：连续这么多帧「整帧无码」时自动存一张原图（每轮接收最多几张）。
+# 真机上「扫不进去」的画面无法靠描述复现，留下原图才能离线判断是模块像素不足、
+# 摩尔纹、失焦还是曝光问题。
+_FAIL_DUMP_STREAK = 45
+_FAIL_DUMP_MAX = 2
+
+# 卡住判定：进会话后进度持续这么多秒为 0 就提示用户调参数（真机最常见的困惑点）
+_STALL_SECONDS = 12
+
+# 曝光 A/B 自寻优：每个窗口观察这么多秒、至少这么多帧才判定；提升不足 _EXPO_GAIN
+# 就回退（拍屏丢帧主因是曝光窗口横跨换码瞬间的撕裂帧，缩短曝光可显著降低该概率）。
+_EXPO_WINDOW_SECONDS = 4.0
+_EXPO_MIN_FRAMES = 30
+_EXPO_GAIN = 0.08
+
+# 每个 QR 模块至少要有这么多相机像素，zxing 在拍屏场景（摩尔纹+轻微失焦）下才稳。
+# 低于此值时优先建议「靠近取景」（免费增加像素），而不是先降帧长（牺牲吞吐）。
+_GOOD_MODULE_PX = 5.0
+
+# DATA 帧字节数 → QR 模块数（ECC L、byte 模式实测值）。
+# 帧长固定时每帧字节数固定（144 固定开销 + 源块），因此模块数可直接查表。
+_FRAME_BYTES_TO_MODULES = (
+    (656, 89),    # 700B 帧长（源块 512B）
+    (1168, 113),  # 1200B 帧长（源块 1024B）
+    (2192, 157),  # 2200B 帧长（源块 2048B）
+)
+
+
+def _qr_modules_for_frame_bytes(nbytes: int) -> int | None:
+    """按 DATA 帧字节数估算 QR 模块数（取最接近的档位，容差 ±48B）。"""
+    best = None
+    for size, modules in _FRAME_BYTES_TO_MODULES:
+        if abs(nbytes - size) <= 48:
+            return modules
+        if best is None or abs(nbytes - size) < abs(nbytes - best[0]):
+            best = (size, modules)
+    return best[1] if best and abs(nbytes - best[0]) <= 200 else None
+_CAPTURE_FPS_FALLBACK = 30    # 设备把帧率协商成个位数时的兜底值
 
 
 def _format_eta(seconds: float) -> str:
@@ -374,6 +462,12 @@ QPushButton#secondary:hover {{ background: {accent_soft}; color: {accent};
     border-color: {accent}; }}
 QPushButton#secondary:pressed {{ background: {accent_soft}; border-color: {accent}; }}
 QPushButton#secondary:disabled {{ background: transparent; color: {sub}; border-color: {border}; }}
+/* 预览卡头部的紧凑次要按钮（如「存帧」）：沿用 secondary 配色但收紧内边距，
+   否则 10px 上下内边距 + 固定 28px 高会把文字压扁。 */
+QPushButton#mini {{ background: {card}; color: {sub}; border: 1px solid {border};
+    border-radius: 8px; padding: 2px 10px; font-size: 12px; }}
+QPushButton#mini:hover {{ background: {accent_soft}; color: {accent}; border-color: {accent}; }}
+QPushButton#mini:pressed {{ background: {accent_soft}; }}
 QLineEdit, QSpinBox, QComboBox, QTextEdit {{ background: {editbg}; border: 1px solid {border};
     border-radius: 10px; padding: 8px 12px; selection-background-color: {accent}; selection-color: #FFFFFF; }}
 QLineEdit:hover, QSpinBox:hover, QComboBox:hover, QTextEdit:hover {{ border-color: {sub}; }}
@@ -443,12 +537,52 @@ def _is_black_frame(frame) -> bool:
     """
     if frame is None or frame.size == 0:
         return True
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(_as_bgr(frame), cv2.COLOR_BGR2GRAY)
     return float(gray.mean()) < 15.0 and float(gray.max()) < 40.0
+
+
+def _as_bgr(frame):
+    """统一成 3 通道 BGR：设备/驱动可能给灰度(2D 或 (H,W,1)) 或 BGRA 帧。
+
+    cv2.cvtColor(BGR2GRAY) 对这两种输入直接抛 cv2.error，而调用它的采集/解码
+    线程一旦没有兜底就会静默死亡。
+    """
+    if frame.ndim == 2:
+        return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    if frame.ndim == 3 and frame.shape[2] == 1:
+        return cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    if frame.ndim == 3 and frame.shape[2] == 4:
+        return cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+    return frame
+
+
+def _prepare_decode_image(frame, pipe):
+    """解码前处理：按码制转色 + 必要时降采样。
+
+    颜色转换按码制分支（彩色码 RGB / 标准 QR 灰度），与解码同在工作线程。
+    降采样只针对「宽于 _DECODE_MAX_WIDTH」的输入（高拍仪强出 4K 之类）：1080p 采集
+    必须原样解码——模块像素就是识别率，早先降到 1280 会把 2200B 帧长直接判死。
+    预览走另一条路（_frame_ready），不受此处影响。
+    """
+    if isinstance(pipe.backend, ColorMatrixBackend):
+        image = cv2.cvtColor(_as_bgr(frame), cv2.COLOR_BGR2RGB)
+    else:
+        image = cv2.cvtColor(_as_bgr(frame), cv2.COLOR_BGR2GRAY)
+    if image.shape[1] > _DECODE_MAX_WIDTH:
+        h = round(image.shape[0] * _DECODE_MAX_WIDTH / image.shape[1])
+        image = cv2.resize(image, (_DECODE_MAX_WIDTH, h), interpolation=cv2.INTER_AREA)
+    return image
+
 
 class MainWindow(QMainWindow):
     GRID_OPTIONS = (("1×1", (1, 1)), ("2×2", (2, 2)), ("3×3", (3, 3)))
-    CODEC_OPTIONS = (("标准QR（推荐）", "qr"), ("彩色码（实验）", "color"))
+    # 彩色码（实验）未通过真机验证，暂不从界面暴露。
+    # 底层实现（qr/color_matrix.py、码制分支、帧长锁定逻辑）完整保留，
+    # 验证通过后把下面第二项加回去即可恢复，无需改动其它代码。
+    CODEC_OPTIONS = (
+        ("标准QR（推荐）", "qr"),
+        # ("彩色码（实验）", "color"),
+    )
     # 后台线程 → UI 线程的 queued 信号（跨线程 emit 自动排队，不在工作线程碰 widget）
     _decode_progress = Signal()
     _decode_error = Signal(str)
@@ -487,6 +621,7 @@ class MainWindow(QMainWindow):
         # 接收统计定时刷新：无新帧时速率/ETA 仍按时间推移更新（滑动窗口左移、ETA 倒计时）
         self._r_stats_timer = QTimer(self)
         self._r_stats_timer.timeout.connect(self._update_r_stats)
+        self._r_stats_timer.timeout.connect(self._check_recv_threads)
         self._pipe: ReceivePipeline | None = None
         self._cap = None
         # 采集/解码均在工作线程，UI 不碰 cap：_capture_loop 负责 open+read+release，
@@ -497,6 +632,30 @@ class MainWindow(QMainWindow):
         self._decode_queue: queue.Queue | None = None
         self._decode_stop = threading.Event()
         self._decode_thread: threading.Thread | None = None
+        # 看门狗状态：解码线程异常退出后自动重启的次数与上次重启时刻（冷却判断）
+        self._decode_restarts = 0
+        self._last_decode_restart = 0.0
+        # 采集档位（_CAPTURE_MODES 下标）：从最优先（1080p）开始，帧率不达标时自动降档
+        self._capture_mode_idx = 0
+        # 协商得到的 (宽, 高)：_report_capture_format 写入，首帧到达时与其核对
+        self._capture_negotiated: tuple[int, int] | None = None
+
+        # 采集实况诊断（预览标题旁常驻显示）
+        self._cam_format = ""
+        self._cam_actual: tuple[int, int] | None = None
+        self._decode_ms = 0.0          # 最近一帧解码耗时（工作线程写、UI 线程读）
+        self._last_raw_frame = None    # 最新原始帧（「保存画面」用）
+        self._fail_dumped = 0          # 本次接收已自动留存失败样本数
+        self._fail_streak = 0          # 连续「整帧无码」计数（触发自动留存）
+        self._stall_since: float | None = None   # 零进展起始时刻（卡住提示用）
+        self._hint_session_id: int | None = None  # 卡住提示所属会话（换会话即复位）
+        # 曝光 A/B 自寻优状态（见 _expo_step）
+        self._expo_state = "off"
+        self._expo_base_rate = 0.0
+        self._expo_t0 = 0.0
+        self._expo_frames = 0
+        self._expo_clean = 0
+        self._expo_last_missed = 0
         # 接收代际令牌：_stop_recv 的 join 超时后（MSMF read 慢时常见）旧线程可能
         # 尚未退出，新一轮 clear() 会让它"复活"，把旧队列残留帧喂进新 pipe——
         # 首帧时间戳被提前打上，"已用"起始即非零；还可能弹旧会话的错误框。
@@ -639,7 +798,8 @@ class MainWindow(QMainWindow):
             "· 设备不限：电脑与电脑、手机与手机、电脑与手机都可以互传；<br>"
             "· 二维码与摄像头保持 15~30cm，对焦清晰、光线均匀成功率最高；<br>"
             "· 发送较慢时调低帧率（如 8 FPS）更稳，调高帧率（如 24/30）更快；<br>"
-            "· 摄像头分辨率较低、识别不稳时，把帧长调低（如 700B）更容易识别；<br>"
+            "· 摄像头分辨率较低、识别不稳时，把帧长调低（如 700B）更容易识别——"
+            "帧长越大，二维码模块越密，每个模块能分到的相机像素越少；<br>"
             "· 传输中断可重新点「开始发送/接收」，已收到的部分会自动续传；<br>"
             "· 关闭窗口会最小化到托盘，右键托盘图标可「退出」。")
 
@@ -649,12 +809,13 @@ class MainWindow(QMainWindow):
             self, "参数说明",
             "<b>帧率</b>：每秒显示多少张二维码。越高传得越快，但码切换太快容易扫不准；"
             "扫不稳时调低（如 8 FPS）更稳。<br><br>"
-            "<b>码制</b>：标准 QR 兼容性最好、推荐使用；彩色码是实验功能，"
-            "需要接收端也选「彩色码」。<br><br>"
+            "<b>码制</b>：当前版本固定使用标准 QR（兼容性最好）。"
+            "彩色码为实验功能，因尚未通过验证暂不提供。<br><br>"
             "<b>纠错</b>：二维码的容错等级。越高越耐遮挡、模糊，但码点更密、更难扫；"
             "一般用 L 或 M 即可。<br><br>"
-            "<b>帧长</b>：每张二维码携带的数据量。摄像头分辨率低、扫不清时选 700B 更易识别；"
-            "设备好可选 1200/2200B 传得更快。<br><br>"
+            "<b>帧长</b>：每张二维码携带的数据量。帧长越大，码点越密、每个码点能分到的"
+            "相机像素越少，越容易扫不出（尤其用手机屏幕当发送端时）——扫不稳就选 700B；"
+            "电脑显示器当发送端、或摄像头分辨率高时可用 1200/2200B 传得更快。<br><br>"
             "<b>冗余</b>：发送时额外多发的纠错数据比例。越高越抗丢帧、传输更稳，但更慢；"
             "链路稳定时 1.2~1.5 即可。<br><br>"
             "<b>网格</b>：一屏显示几个二维码。2×2/3×3 一屏数据更多、更快，但每个码更小，"
@@ -682,6 +843,8 @@ class MainWindow(QMainWindow):
             f"background:{qr_bg}; border:1px solid {border}; border-radius:20px; color:{sub_txt};")
         self._cam_label.setStyleSheet(
             f"background:{cam_bg}; border:1px solid {border}; border-radius:20px; color:{sub_txt};")
+        if hasattr(self, "_s_drop_hint"):
+            self._s_drop_hint.setStyleSheet(f"color:{sub_txt}; font-size:11px;")
         # QTextEdit viewport 背景随主题（QSS background 对 viewport 有时不生效）
         for te in (self._s_textedit, self._r_result):
             te.viewport().setStyleSheet(f"background:{editbg};")
@@ -851,6 +1014,7 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self._on_tab_changed)
         root.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
+        self.setAcceptDrops(True)   # 整窗接收文件拖拽（见 dragEnterEvent/dropEvent）
         self.statusBar().showMessage("就绪")
 
     def _on_tab_changed(self, _index: int):
@@ -937,6 +1101,14 @@ class MainWindow(QMainWindow):
         file_row.addWidget(self._s_pick)
         left.addLayout(file_row)
 
+        # 拖拽提示（静态说明）：只在文件模式显示，颜色随主题切换（见 _apply_theme）
+        self._s_drop_hint = QLabel("可直接拖动文件到此处，每次仅能传递一个文件")
+        self._s_drop_hint.setStyleSheet("color:#64748B; font-size:11px;")
+        self._s_drop_hint.setToolTip(
+            "把单个文件拖到窗口任意位置即可载入，会自动切到发送页。\n"
+            "发送过程中不支持更换文件。")
+        left.addWidget(self._s_drop_hint)
+
         # 文件优化：无损（OOXML 重打包/PDF 重压缩）选择文件后自动执行；
         # 勾选下方选项才额外允许有损转码（照片转 JPEG 等，会改变接收到的文件内容/格式）
         self._s_optimize = QCheckBox("允许有损优化（会改变接收文件）")
@@ -950,6 +1122,8 @@ class MainWindow(QMainWindow):
         self._s_textedit = QTextEdit()
         self._s_textedit.setPlaceholderText("输入要发送的文本…")
         self._s_textedit.setMaximumHeight(100)
+        # 拖文件时不让文本框吞掉 drop（QTextEdit 默认会插入路径文本），交给窗口统一处理
+        self._s_textedit.setAcceptDrops(False)
         self._s_textedit.hide()
         left.addWidget(self._s_textedit)
         # 字符统计角标（框内右下角，不计字符限制）
@@ -982,9 +1156,9 @@ class MainWindow(QMainWindow):
         self._param_help_btn.setToolTip(
             "查看各参数含义（点击查看完整说明）\n"
             "· 帧率：每秒显示的码数，越高越快、越低越稳\n"
-            "· 码制：标准 QR 兼容最好；彩色码为实验功能\n"
+            "· 码制：当前固定标准 QR（彩色码未通过验证，暂不提供）\n"
             "· 纠错：越高越耐遮挡模糊，但码更密\n"
-            "· 帧长：单码数据量，设备差选 700 更易识别\n"
+            "· 帧长：单码数据量，码点密易扫不出，扫不稳选 700\n"
             "· 冗余：越高越抗丢帧，但更慢\n"
             "· 网格：一屏码数，越大越快但码更小")
         self._param_help_btn.clicked.connect(self._show_param_help)
@@ -1018,6 +1192,11 @@ class MainWindow(QMainWindow):
                     w.setObjectName("paramcombo")   # 紧凑内边距（见 _build_style）
                 w.setFixedHeight(34)
                 setattr(self, attr, w)
+                # 只有一个可选项时禁用下拉：彩色码暂不暴露后「码制」只剩标准 QR，
+                # 可点开却无其它选项会让人以为界面坏了。
+                if isinstance(w, QComboBox) and len(items) <= 1:
+                    w.setEnabled(False)
+                    w.setToolTip("彩色码（实验）已知问题未解决，当前版本仅提供标准 QR")
                 cell.addWidget(w, 1)
                 row.addLayout(cell, 1)
             left.addLayout(row)
@@ -1097,10 +1276,17 @@ class MainWindow(QMainWindow):
         self._cam_refresh_btn.setFixedWidth(92)
         ctrl_row.addWidget(self._cam_refresh_btn)
         ctrl_row.addSpacing(6)
-        ctrl_row.addWidget(QLabel("码制"))
+        # 码制选择只在有多个码制时才有意义：彩色码暂不暴露后只剩标准 QR，
+        # 整个标签 + 下拉一起隐藏（工具栏空间紧张，禁用态会更突兀）。
+        self._r_codec_label = QLabel("码制")
         self._r_codec = QComboBox(); self._r_codec.addItems([n for n, _ in self.CODEC_OPTIONS])
         self._r_codec.setFixedWidth(158)
-        ctrl_row.addWidget(self._r_codec)
+        for w in (self._r_codec_label, self._r_codec):
+            ctrl_row.addWidget(w)
+            w.setVisible(len(self.CODEC_OPTIONS) > 1)
+        if len(self.CODEC_OPTIONS) > 1:
+            ctrl_row.addSpacing(6)
+        ctrl_row.addSpacing(6)
         self._r_start = QPushButton("开始接收")
         self._r_start.setCheckable(True)
         self._r_start.toggled.connect(self._toggle_recv)
@@ -1138,15 +1324,40 @@ class MainWindow(QMainWindow):
         ptitle = QLabel("相机预览")
         ptitle.setStyleSheet("font-size:15px; font-weight:700;")
         phead.addWidget(ptitle)
+        # 采集实况（常驻，不随状态栏消息被覆盖）：分辨率/帧率/编码 + 真实出帧 + 解码耗时
+        self._cam_meta = QLabel("")
+        self._cam_meta.setStyleSheet("color:#64748B; font-size:11px;")
+        self._cam_meta.setToolTip(
+            "摄像头实际生效的采集参数。\n"
+            "识别不稳时先看这里：分辨率越低、码点每个模块分到的像素越少。")
+        phead.addWidget(self._cam_meta)
         phead.addStretch(1)
         self._r_badge = QLabel("等待接收")
         self._r_badge.setObjectName("badge")
         phead.addWidget(self._r_badge)
+        # 保存当前画面（诊断用）：把相机原始帧存成 PNG，便于离线定位识别问题。
+        # 放在徽标右侧、用次要按钮样式——原先夹在实况文字与徽标之间、且继承主按钮
+        # 蓝底填充，24px 高把文字压得看不清，也会打断「接收中」这个状态标识的阅读。
+        self._r_dump = QPushButton("存帧")
+        self._r_dump.setObjectName("mini")
+        self._r_dump.setToolTip("把当前相机画面存为 PNG（排查识别问题用）")
+        self._r_dump.setMinimumWidth(64)
+        self._r_dump.setFixedHeight(28)
+        self._r_dump.clicked.connect(self._dump_frame)
+        self._r_dump.setVisible(False)
+        phead.addWidget(self._r_dump)
         pv.addLayout(phead)
         self._cam_label = QLabel("（摄像头预览）")
         self._cam_label.setAlignment(Qt.AlignCenter)
         self._cam_label.setMinimumSize(480, 180)
         pv.addWidget(self._cam_label, 1)
+        # 卡住提示：能出画面、会话也建立了，但长时间 0 进展时给出可执行建议。
+        # 只「干等」是最糟的体验——用户无法判断是没对准、帧长太大还是设备问题。
+        self._r_hint = QLabel("")
+        self._r_hint.setWordWrap(True)
+        self._r_hint.setStyleSheet("color:#B45309; font-size:12px;")
+        self._r_hint.setVisible(False)
+        pv.addWidget(self._r_hint)
         row.addWidget(preview, 3)
 
         # 接收结果卡（窄列占 1 份宽：标题 + 纵向统计 + 结果区 + 复制/保存）
@@ -1254,6 +1465,65 @@ class MainWindow(QMainWindow):
         self._r_stats_left.setText(left)
         self._r_stats_right.setText(right)
         self._r_stats.show()
+        self._refresh_cam_meta()   # 每模块像素随取景变化，跟着 500ms 统计一起刷
+        self._check_stalled(pipe)
+
+    def _module_pixels(self) -> tuple[float, int] | None:
+        """实测「每个 QR 模块分到几个相机像素」，返回 (px/模块, 模块数) 或 None。
+
+        依据：backend 记录最近一次成功解码的 (码宽px, 图宽px, 字节数)，结合当前会话
+        源块大小推出的模块数。这是判断识别瓶颈的唯一客观量——取景越小、帧长越大，
+        每模块像素越少，越到临界值以下就整帧解不出。
+        """
+        pipe = self._pipe
+        backend = getattr(pipe, "backend", None) if pipe is not None else None
+        geo = getattr(backend, "last_code_geometry", None)
+        if not geo:
+            return None
+        code_w, _img_w, nbytes = geo
+        modules = _qr_modules_for_frame_bytes(nbytes)
+        if not modules:
+            return None
+        return code_w / modules, modules
+
+    def _check_stalled(self, pipe) -> None:
+        """会话已建立但长时间零进展 → 按实测模块像素给出**针对性**建议。
+
+        两类成因的处置完全不同，给错建议等于让用户白折腾：
+        - 码在画面里太小（取景不足）→ 让用户靠近/放大，像素立刻变多，免费提速；
+        - 码够大但仍扫不出 → 才是帧长太大（模块太密），需要降帧长。
+        """
+        if not hasattr(self, "_r_hint"):
+            return
+        # 新一批码（session_id 变了）：卡住计时必须重来，否则上一轮攒下的「已卡住」
+        # 会立刻把提示弹到新传输上，用户会以为新文件也卡了。
+        sid = getattr(getattr(pipe, "session", None), "session_id", None)
+        if sid != self._hint_session_id:
+            self._hint_session_id = sid
+            self._stall_since = None
+            self._r_hint.setVisible(False)
+        if pipe.is_complete or pipe.progress > 0:
+            self._stall_since = None
+            self._r_hint.setVisible(False)
+            return
+        now = time.monotonic()
+        if self._stall_since is None:
+            self._stall_since = now
+            return
+        if now - self._stall_since < _STALL_SECONDS:
+            return
+        chunk = 1 << pipe.session.manifest.chunk_size_log
+        measured = self._module_pixels()
+        if measured is not None and measured[0] < _GOOD_MODULE_PX:
+            self._r_hint.setText(
+                f"二维码在画面里偏小（每模块约 {measured[0]:.1f} 像素，需 ≥{_GOOD_MODULE_PX:.0f}）。"
+                "把手机靠近、或让二维码占满预览画面的一半以上，速度会明显变快。")
+        else:
+            px = f"（每模块约 {measured[0]:.1f} 像素）" if measured else ""
+            self._r_hint.setText(
+                f"画面里能对上码，但 {_STALL_SECONDS} 秒没解出一个数据帧{px}"
+                f"（当前源块 {chunk}B）。码点太密：请把发送端「帧长」调到 700B。")
+        self._r_hint.setVisible(True)
 
     def _update_r_missing(self):
         """刷新缺块明细：传输中展示未恢复源块索引，缺 0 块或已完成时隐藏。"""
@@ -1486,6 +1756,8 @@ class MainWindow(QMainWindow):
         return ColorMatrixBackend() if code == "color" else StandardQrBackend()
 
     def _sync_send_codec_controls(self) -> None:
+        # 彩色码已从界面撤下（CODEC_OPTIONS 仅剩标准 QR），is_color 恒为 False，
+        # 下方彩色码分支目前不可达；保留是为了恢复彩色码时无需重写这段联动逻辑。
         is_color = self._s_codec.currentIndex() == 1
         self._s_grid.setEnabled(not is_color)
         if is_color and self._s_grid.currentIndex() != 0:
@@ -1499,6 +1771,8 @@ class MainWindow(QMainWindow):
         is_file = self._s_file.isChecked()
         self._s_pick.setVisible(is_file)
         self._s_filelabel.setVisible(is_file)
+        if hasattr(self, "_s_drop_hint"):
+            self._s_drop_hint.setVisible(is_file)
         self._s_optimize.setVisible(is_file)
         self._s_textedit.setVisible(not is_file)
         if hasattr(self, "_s_clear"):
@@ -1524,11 +1798,77 @@ class MainWindow(QMainWindow):
     def _pick_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "选择要发送的文件")
         if path:
-            self._file_path = path
-            name = os.path.basename(path)
-            self._s_filelabel.setFullText(name)
-            self._s_filelabel.setToolTip(path)
-            self._update_optimize_preview()
+            self._load_send_file(path)
+
+    # ────────────── 文件拖拽 ──────────────
+    @staticmethod
+    def _dropped_file(mime) -> str | None:
+        """从拖拽数据取第一个存在的本地文件；无则返回 None（目录/文本/网络 URL 一律忽略）。"""
+        if not mime.hasUrls():
+            return None
+        for url in mime.urls():
+            if url.isLocalFile():
+                path = url.toLocalFile()
+                if path and os.path.isfile(path):
+                    return path
+        return None
+
+    def _send_busy(self) -> bool:
+        """发送中不接受换文件：控制器已按旧文件建好会话，中途换源会让进度语义错乱。"""
+        return self._send_timer.isActive()
+
+    def _set_drag_hint(self, active: bool) -> None:
+        if not hasattr(self, "_s_filelabel"):
+            return
+        if active:
+            self._s_filelabel.setFullText("松开鼠标载入文件…")
+            self._s_filelabel.setToolTip("拖入的文件将作为发送内容")
+            return
+        path = getattr(self, "_file_path", "")
+        self._s_filelabel.setFullText(os.path.basename(path) if path else "（未选择）")
+        self._s_filelabel.setToolTip(path or "（未选择）")
+        self._update_optimize_preview()
+
+    def dragEnterEvent(self, event):
+        if self._send_busy() or self._dropped_file(event.mimeData()) is None:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self._set_drag_hint(True)
+        self.statusBar().showMessage("松开鼠标载入文件…")
+
+    def dragMoveEvent(self, event):
+        if self._send_busy() or self._dropped_file(event.mimeData()) is None:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event):
+        self._set_drag_hint(False)
+        self.statusBar().showMessage("就绪")
+        event.accept()
+
+    def dropEvent(self, event):
+        path = self._dropped_file(event.mimeData())
+        if path is None or self._send_busy():
+            self._set_drag_hint(False)
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self._load_send_file(path)
+
+    def _load_send_file(self, path: str) -> None:
+        """载入发送文件（选择按钮与拖拽共用）：切到发送页 / 文件模式并刷新预览。"""
+        if self.tabs.currentIndex() != 0:
+            self._tab_send.click()      # 同步顶部 tab 按钮态（不然只有页面切换）
+        if not self._s_file.isChecked():
+            self._s_file.setChecked(True)   # 触发 _on_send_mode，显示文件行
+        self._file_path = path
+        name = os.path.basename(path)
+        self._s_filelabel.setFullText(name)
+        self._s_filelabel.setToolTip(path)
+        self._update_optimize_preview()
+        self.statusBar().showMessage(f"已载入文件：{name}")
 
     def _toggle_send(self, checked: bool):
         if checked:
@@ -1871,6 +2211,25 @@ class MainWindow(QMainWindow):
         self._capture_stop.clear()
         self._recv_generation += 1
         gen = self._recv_generation
+        self._decode_restarts = 0
+        self._last_decode_restart = 0.0
+        self._capture_mode_idx = 0   # 每轮接收重新从最高分辨率试起（上次降档多半是临时带宽问题）
+        # 诊断状态复位（含「保存画面」按钮可见性）
+        self._cam_format = ""
+        self._cam_actual = None
+        self._capture_negotiated = None
+        self._decode_ms = 0.0
+        self._last_raw_frame = None
+        self._fail_dumped = 0
+        self._fail_streak = 0
+        self._stall_since = None
+        self._r_hint.setVisible(False)
+        # 曝光寻优：每轮接收都重新做一次 A/B（光线条件可能变了）
+        self._expo_state = "baseline"
+        self._expo_base_rate = 0.0
+        self._reset_expo_window()
+        self._refresh_cam_meta()
+        self._r_dump.setVisible(True)
         self._decode_thread = threading.Thread(
             target=self._decode_loop, args=(self._decode_queue, gen),
             name="recv-decode", daemon=True)
@@ -1914,6 +2273,12 @@ class MainWindow(QMainWindow):
         self._update_running_icons()
         self._r_badge.setText("等待接收")
         self._cam_refresh_btn.setEnabled(True)
+        self._r_dump.setVisible(False)
+        self._cam_format = ""
+        self._cam_actual = None
+        self._capture_negotiated = None
+        self._decode_ms = 0.0
+        self._refresh_cam_meta()
         # 全程没出过帧（黑屏/打开失败等）时恢复占位文字，避免残留"正在打开摄像头…"
         if self._cam_label.pixmap() is None:
             self._cam_label.setText("（摄像头预览）")
@@ -1924,7 +2289,13 @@ class MainWindow(QMainWindow):
         ReceivePipeline 只在本线程访问；结果经 Signal 回 UI 线程。不碰 self._cap。
         gen 为启动时的接收代际：停止超时残留的旧线程在此发现代际不匹配，
         不会把旧帧喂进新 pipe（旧帧 timestamp 会污染新会话的已用/速率统计）。
+
+        容错：单帧异常只跳过，连续失败超阈值才停机。旧实现把 cvtColor 放在 try 外、
+        try 里又只接 ValueError，灰度/4 通道帧的 cv2.error、落盘 OSError、解压
+        zlib.error 都会让线程静默死亡——而 UI 仍显示"接收中"、预览照刷，
+        永远不再出结果。这正是"偶发长时间超时无输出"最直接的来源。
         """
+        consecutive_errors = 0
         while not self._decode_stop.is_set():
             if gen != self._recv_generation:
                 return   # 本线程属旧代：新会话已启动，静默退出不 emit
@@ -1937,23 +2308,74 @@ class MainWindow(QMainWindow):
             pipe = self._pipe
             if pipe is None:
                 continue
-            # 颜色转换按码制分支（彩色码 RGB / 标准 QR 灰度），与解码同在工作线程
-            if isinstance(pipe.backend, ColorMatrixBackend):
-                image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            else:
-                image = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            # 解码前降采样：仅当设备无视采集请求、实际宽度超过 _CAPTURE_WIDTH 时（如高拍仪
-            # 强出 1080p），才降回请求宽度。遵循请求的普通摄像头已输出 1280 宽，此处条件不成立，
-            # 不做任何 resize——避免无谓缩放拖慢解码 + QR 模块缩水降低识别率。预览不受影响。
-            if image.shape[1] > _CAPTURE_WIDTH:
-                h = round(image.shape[0] * _CAPTURE_WIDTH / image.shape[1])
-                image = cv2.resize(image, (_CAPTURE_WIDTH, h), interpolation=cv2.INTER_AREA)
             try:
+                # 颜色转换/降采样/解码全部纳入单帧容错（cvtColor 也可能对坏帧抛 cv2.error）
+                image = _prepare_decode_image(frame, pipe)
+                missed_before = getattr(pipe, "missed_images", 0)
+                started = time.perf_counter()
                 pipe.process_image(image)
-            except ValueError as e:
-                self._decode_error.emit(str(e))
+                self._decode_ms = (time.perf_counter() - started) * 1000.0
+            except SessionCorruptError as e:
+                self._decode_error.emit(str(e))   # 会话级损坏：重试无意义，停机报错
                 return
+            except Exception as e:  # noqa: BLE001 — 单帧异常不得杀死整条线程
+                consecutive_errors += 1
+                if consecutive_errors >= _DECODE_ERROR_LIMIT:
+                    self._decode_error.emit(f"连续 {consecutive_errors} 帧解码失败：{e}")
+                    return
+                continue
+            consecutive_errors = 0
+            # 整帧一个码都没扫到 → 连续计数；连续 _FAIL_DUMP_STREAK 帧仍无码就自动留一张
+            # 原图样本（每轮接收最多 _FAIL_DUMP_MAX 张）：真机上识别不出的画面极难口述，
+            # 存下来才能离线用 zxing/参数对比定位，而不是靠猜。
+            if getattr(pipe, "missed_images", 0) > missed_before:
+                self._fail_streak += 1
+                if (self._fail_streak >= _FAIL_DUMP_STREAK
+                        and self._fail_dumped < _FAIL_DUMP_MAX):
+                    path = self._save_debug_frame(frame, "fail")
+                    if path:
+                        self._fail_dumped += 1
+                        self._fail_streak = 0
+                        self._capture_status.emit(f"已留存识别失败样本：{path}")
+            else:
+                self._fail_streak = 0
             self._decode_progress.emit()
+
+    def _check_recv_threads(self):
+        """接收期间的线程存活看门狗（随 500ms 统计定时器触发）。
+
+        线程异常退出后没有 self._decode_thread = None 的路径，而 _on_decode_progress
+        以 _capture_thread is None 判"是否接收中"，所以线程死了 UI 仍显示接收中。
+        这里按心跳检查 is_alive()：解码线程异常退出就自动重启（pipe/队列都在 UI 侧，
+        重启不影响会话）；短时间内反复死亡或超过总次数则停机报错。
+        采集线程的容错在 _capture_loop 内部重试，这里只兜"线程彻底没了"的情况。
+        """
+        if not self._r_start.isChecked():
+            return
+        dthread = self._decode_thread
+        if (dthread is not None and not dthread.is_alive()
+                and not self._decode_stop.is_set()
+                and self._pipe is not None and self._decode_queue is not None):
+            now = time.monotonic()
+            if (self._decode_restarts >= _MAX_DECODE_RESTARTS
+                    or now - self._last_decode_restart < _THREAD_RESTART_COOLDOWN):
+                self._decode_error.emit("解码线程反复异常退出，接收已停止")
+                return
+            self._decode_restarts += 1
+            self._last_decode_restart = now
+            self.statusBar().showMessage(
+                f"解码线程异常退出，已自动重启（第 {self._decode_restarts} 次）")
+            self._decode_thread = threading.Thread(
+                target=self._decode_loop, args=(self._decode_queue, self._recv_generation),
+                name="recv-decode", daemon=True)
+            self._decode_thread.start()
+            return
+        cthread = self._capture_thread
+        if (cthread is not None and not cthread.is_alive()
+                and not self._capture_stop.is_set()):
+            # 采集线程是打开设备的持有者，异常退出后重开容易与驱动状态打架；
+            # _capture_loop 已内部重试过一次，这里再见到死亡就明确停机。
+            self._decode_error.emit("采集线程异常退出，接收已停止")
 
     def _on_decode_progress(self):
         """UI 线程：后台解码完一帧后的进度刷新（接收已停止时直接忽略）。
@@ -1969,6 +2391,7 @@ class MainWindow(QMainWindow):
         self._update_r_count()
         self._update_r_missing()
         self._update_r_stats()
+        self._refresh_cam_meta()   # 采集实况常驻在预览标题旁（状态栏会被本函数的进度覆盖）
         self.statusBar().showMessage(f"进度 {pipe.progress:.0%}")
         if pipe.result is not None:
             self._on_received()
@@ -1982,7 +2405,35 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "错误", message)
 
     def _capture_loop(self, candidates: list[tuple[int, str]], gen: int):
-        """采集线程：按候选设备顺序 open + 实测画面 + 循环 read，黑屏自动顺延。
+        """采集线程入口：带崩溃兜底。
+
+        旧实现让采集线程直接执行 read 循环，任何未捕获异常（cv2.error / 驱动异常）
+        都会让线程无声退出；而 UI 以线程对象非 None 判断"接收中"，界面会永远停在
+        接收中且不再出任何结果。这里兜住所有异常：释放可能仍被持有的设备、
+        重试一次（驱动协商偶发错误），仍失败则明确报错停机。
+        """
+        for attempt in range(2):
+            try:
+                self._capture_loop_once(candidates, gen)
+                return
+            except Exception as e:  # noqa: BLE001 — 采集线程不得静默死亡
+                cap = getattr(self, "_cap", None)
+                if cap is not None:
+                    try:
+                        cap.release()
+                    except Exception:  # noqa: BLE001, S110 — 兜底释放尽力而为
+                        pass
+                    self._cap = None
+                if gen != self._recv_generation or self._capture_stop.is_set():
+                    return   # 本线程属旧代或已请求停止：静默退出
+                if attempt >= 1:
+                    self._decode_error.emit(f"采集线程异常：{e}")
+                    return
+                self._capture_status.emit(f"采集异常（{e}），正在重试…")
+                time.sleep(0.2)
+
+    def _capture_loop_once(self, candidates: list[tuple[int, str]], gen: int):
+        """采集线程本轮：按候选设备顺序 open + 实测画面 + 循环 read，黑屏自动顺延。
 
         open/read/release 全在此线程，UI 经 _frame_ready 收帧刷新预览、
         经 _decode_queue 喂解码线程。失败经 _decode_error 报。
@@ -2008,25 +2459,31 @@ class MainWindow(QMainWindow):
                 if gen == self._recv_generation and not self._capture_stop.is_set():
                     self._capture_status.emit(f"设备 {idx} 无画面，尝试下一个设备…")
                 continue
-            if idx != candidates[0][0] and gen == self._recv_generation:
-                self._device_in_use.emit(idx)   # 顺延成功：下拉框同步到实际设备
             # 链路调优（手机虚拟摄像头尤其关键）：
             # - MJPG 压缩：USB 虚拟摄像头默认 YUYV 未压缩，高分辨率带宽不足会严重掉帧 → 进度慢。
             # - 缓冲 1 帧：默认多帧缓冲会让 read() 返回过时画面，屏幕 QR 快速切换时识别率暴跌。
             # - 固定 720p：在细节清晰度与带宽之间取平衡。set() 失败（设备不支持）静默忽略。
-            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, _CAPTURE_WIDTH)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-            # 60fps（设备支持时）：曝光随之缩短，降低相机曝光横跨屏幕两帧切换的
-            # 时间混帧概率——基准仿真显示混帧是高帧率下的主要丢帧来源。
-            cap.set(cv2.CAP_PROP_FPS, 60)
+            self._apply_capture_settings(cap, backend)
+            self._report_capture_format(cap, idx)
             if gen != self._recv_generation:
                 cap.release()   # open 期间新一轮已启动：本线程属旧代，静默释放退出
                 return
             # 标记 open 成功，供 _on_decode_progress / _on_decode_error 判"接收中"
             self._cap = cap
-            outcome = self._run_capture_reads(cap, idx, gen)
+            # 顺延成功：下拉框同步到实际设备。必须放在 _cap 赋值之后——监听方
+            # （含测试与 UI）收到该信号即认为设备已投入使用，早发会读到 None。
+            if idx != candidates[0][0] and gen == self._recv_generation:
+                self._device_in_use.emit(idx)
+            outcome = self._run_capture_reads(cap, idx, gen, backend)
+            if outcome == "expo_revert":
+                # 短曝光无改善：重开设备以恢复厂商默认（自动）曝光，再继续接收。
+                # 会话在 UI 侧，重开不丢进度。
+                if gen == self._recv_generation and not self._capture_stop.is_set():
+                    cap.release()
+                    self._cap = None
+                    time.sleep(0.2)
+                    continue
+                return
             if outcome == "readfail":
                 # 假可用设备：isOpened 成功但 read 持续失败（MSMF 协商错误），
                 # 不静默黑屏卡死，明确报错提示换设备/检查驱动。
@@ -2034,6 +2491,18 @@ class MainWindow(QMainWindow):
                     self._decode_error.emit(
                         f"摄像头 {idx} 无法读取画面，设备可能未真正出帧，请改选其它设备或检查驱动")
                 return
+            if outcome == "slow":
+                # 原地重开也救不回的低帧率：有候选则顺延，否则明确报错（不要笼统说“无画面”）
+                if gen == self._recv_generation and not self._capture_stop.is_set():
+                    if remaining:
+                        self._capture_status.emit(
+                            f"设备 {idx} 帧率持续过低，尝试下一个设备…")
+                    else:
+                        self._decode_error.emit(
+                            f"摄像头 {idx} 帧率持续过低（低于 {_MIN_FPS:.0f} fps），"
+                            "请重新插入设备或改选其它设备")
+                        return
+                continue
             if outcome == "blackout":
                 # 打开后宽限期内持续纯黑：有候选则顺延，无候选走下方全部失败报错
                 if (gen == self._recv_generation and not self._capture_stop.is_set()
@@ -2067,31 +2536,191 @@ class MainWindow(QMainWindow):
                     c.release()
                     time.sleep(0.3)
                     continue
+                slow_reads = 0
                 for _ in range(_OPEN_PROBE_FRAMES):
+                    started = time.monotonic()
                     try:
                         ok, frame = c.read()
                     except Exception:  # noqa: BLE001 — 个别设备 read 抛异常按失败处理
                         ok, frame = False, None
-                    if ok and frame is not None and not _is_black_frame(frame):
+                    # 驱动落入 1fps 状态时 read 精确阻塞约 1s：8 帧探测会白等 8 秒，
+                    # 连续慢读直接放弃本轮（交给重试/下一候选），避免"打开就很慢"。
+                    if time.monotonic() - started >= _SLOW_READ_SECONDS:
+                        slow_reads += 1
+                        if slow_reads >= _SLOW_READ_LIMIT:
+                            break
+                    elif ok and frame is not None and not _is_black_frame(frame):
                         return c
                     time.sleep(_OPEN_PROBE_INTERVAL)
                 c.release()
                 time.sleep(0.3)
         return None
 
-    def _run_capture_reads(self, cap, idx: int, gen: int) -> str:
+    def _apply_capture_settings(self, cap, backend: str = "auto") -> None:
+        """链路调优参数（设备不支持时 set 返回 False，个别驱动直接抛异常——均忽略）。"""
+        try:
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            # DSHOW 不支持 BUFFERSIZE（实测返回 False），每次 set 还带约 400ms 协商开销
+            if backend != "dshow":
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            self._negotiate_capture_mode(cap)
+        except Exception:  # noqa: BLE001, S110 — 个别驱动 set/get 抛异常；不支持按默认参数继续
+            pass
+
+    def _downgrade_capture_mode(self) -> bool:
+        """把采集档位降一档（如 1080p→720p）；已在最低档或档位未启用时返回 False。
+
+        用途：1080p 在 USB 2.0 口上可能只跑到 3~5fps。低帧率重开若仍请求同一档，
+        等于白开一次；先降档再重开，用 1.5 倍的模块像素换回可用帧率。
+        """
+        if self._capture_mode_idx < len(_CAPTURE_MODES) - 1:
+            self._capture_mode_idx += 1
+            return True
+        return False
+
+    def _negotiate_capture_mode(self, cap) -> tuple[int, int, int]:
+        """按 _CAPTURE_MODES 逐档协商「宽/高/帧率」，回读校验后返回实际采用的一档。
+
+        为什么必须回读：set() 不返回是否生效，而 USB 摄像头常见两种静默降级——
+        (1) 请求 1080p 被协商成 720p（低带宽口/驱动不支持该组合）；
+        (2) 请求 30fps 被协商成个位数且不自愈。
+        宽度回读为 0 表示该后端不报告尺寸，此时按「已接受」处理，交给帧率兜底。
+        增益来源：每模块相机像素从 ~3.7 提到 ~5.5，是把 1200B/2200B 帧长从「扫不出」
+        拉回「扫得出」的关键（详见 _CAPTURE_MODES 注释）。
+        """
+        chosen = _CAPTURE_MODES[-1]
+        for w, h, fps in _CAPTURE_MODES[self._capture_mode_idx:]:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+            cap.set(cv2.CAP_PROP_FPS, fps)
+            aw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            ah = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            afps = float(cap.get(cv2.CAP_PROP_FPS) or 0)
+            size_ok = aw <= 0 or ah <= 0 or (aw >= w * 0.9 and ah >= h * 0.9)
+            # 高帧率档（60fps）必须真生效才有意义：60fps 的价值就是强制曝光 ≤16.7ms，
+            # 若驱动报 30 就等于没换档，此时继续往下试（下一档正是 720p30，无损失）。
+            fps_ok = fps < 50 or afps <= 0 or afps >= 45
+            if size_ok and fps_ok:
+                chosen = (w, h, fps)
+                break
+        # 帧率兜底：部分机型把 30 协商成个位数且不自愈（实测冷开 4/15），明确回落 30。
+        applied = float(cap.get(cv2.CAP_PROP_FPS) or 0)
+        if applied and applied < _CAPTURE_FPS_FALLBACK:
+            cap.set(cv2.CAP_PROP_FPS, _CAPTURE_FPS_FALLBACK)
+            chosen = (chosen[0], chosen[1], _CAPTURE_FPS_FALLBACK)
+        return chosen
+
+    def _report_capture_format(self, cap, idx: int) -> None:
+        """回读协商结果并记下，供「实际出帧是否与协商一致」校验。
+
+        set() 一律不检查返回值，回读才能暴露「请求 1080p 实际 720p / 请求 30fps
+        实际个位数」这类静默降级（状态栏给用户看一次）。
+        """
+        try:
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps = float(cap.get(cv2.CAP_PROP_FPS))
+            fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
+        except Exception:  # noqa: BLE001 — 回读失败不影响采集
+            return
+        if w <= 0 or h <= 0:
+            return
+        self._capture_negotiated = (w, h)
+        code = "".join(chr((fourcc >> (8 * i)) & 0xFF) for i in range(4)).strip("\x00 ")
+        fps_txt = f" @ {fps:.0f}fps" if fps > 0 else ""
+        self._cam_format = f"{w}×{h}{fps_txt} {code}".strip()
+        self._refresh_cam_meta()
+        self._capture_status.emit(f"设备 {idx}: {self._cam_format}")
+
+    def _check_actual_frame_size(self, cap, idx: int, frame) -> None:
+        """首帧到达时核对真实出帧尺寸：部分驱动报 1920 却只出 640×480。
+
+        这类「报大出小」是拍屏识别率骤降的隐形原因——协商看起来是 1080p，
+        实际每模块像素还是 720p 的三分之一。不符时在预览标题旁常驻标红。
+        """
+        fh, fw = frame.shape[:2]
+        self._cam_actual = (fw, fh)
+        neg = self._capture_negotiated
+        if neg and (fw, fh) != neg:
+            self._capture_status.emit(
+                f"设备 {idx} 实际出帧 {fw}×{fh}（协商 {neg[0]}×{neg[1]} 未生效），"
+                "识别率会受影响")
+        self._refresh_cam_meta()
+
+    def _refresh_cam_meta(self) -> None:
+        """刷新预览标题旁的采集实况（常驻显示，不会被进度消息冲掉）。"""
+        if not hasattr(self, "_cam_meta"):
+            return
+        parts = []
+        if self._cam_format:
+            parts.append(self._cam_format)
+        neg, act = self._capture_negotiated, self._cam_actual
+        if act and neg and act != neg:
+            parts.append(f"⚠实际出帧 {act[0]}×{act[1]}")
+        elif act:
+            parts.append(f"出帧 {act[0]}×{act[1]}")
+        if self._decode_ms:
+            parts.append(f"解码 {self._decode_ms:.1f}ms")
+        measured = self._module_pixels() if self._r_start.isChecked() else None
+        if measured is not None:
+            px, modules = measured
+            flag = "" if px >= _GOOD_MODULE_PX else "（偏小，请靠近）"
+            parts.append(f"每模块 {px:.1f}px/{modules}模块{flag}")
+        text = " · ".join(parts)
+        self._cam_meta.setText(text)
+        # 协商与实际不一致属异常，标红提醒用户换口/换线
+        self._cam_meta.setStyleSheet(
+            "color:#DC2626; font-size:11px; font-weight:600;" if (act and neg and act != neg)
+            else "color:#64748B; font-size:11px;")
+
+    def _debug_dir(self) -> str:
+        d = os.path.join(os.path.expanduser("~"), ".qrferry", "debug")
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def _save_debug_frame(self, frame, tag: str) -> str | None:
+        """把相机原始帧存成 PNG（失败样本/手动导出共用）；返回路径或 None。"""
+        try:
+            name = time.strftime(f"{tag}-%Y%m%d-%H%M%S.png")
+            path = os.path.join(self._debug_dir(), name)
+            if not cv2.imwrite(path, _as_bgr(frame)):
+                return None
+            return path
+        except Exception:  # noqa: BLE001 — 诊断落盘失败绝不能影响接收
+            return None
+
+    def _dump_frame(self) -> None:
+        """「保存画面」按钮：把当前帧存盘并提示路径（排查识别问题用）。"""
+        frame = self._last_raw_frame
+        if frame is None:
+            self.statusBar().showMessage("还没有画面可保存（请先开始接收）")
+            return
+        path = self._save_debug_frame(frame, "manual")
+        self.statusBar().showMessage(
+            f"画面已保存：{path}" if path else "保存失败（请检查磁盘权限）")
+
+    def _run_capture_reads(self, cap, idx: int, gen: int, backend: str = "auto") -> str:
         """主采集循环：持续 read 并投帧；退出时释放 cap 并清除 _cap 活跃标记。
 
         返回退出原因：
         - "stop"：正常停止（capture_stop 置位或代际过期）
         - "readfail"：连续 read 失败超阈值（假可用设备，MSMF 协商错误）
         - "blackout"：打开后宽限期内持续纯黑帧（虚拟摄像头空载/切流后无画面）
+        - "slow"：实测帧率持续低于 _MIN_FPS，且原地重开 _REOPEN_ATTEMPTS 次仍无改善
         宽限期内只监控「连续纯黑」；宽限期过后不再监控黑帧——避免传输中暗场景
         （手机息屏、镜头被挡等）被误判为设备故障；read 失败监控始终生效。
+        帧率监控全程生效：1fps 状态下 read 返回 ok=True，只靠 read 失败/黑帧都发现不了。
         """
         read_fail = 0
         grace_end = time.monotonic() + _BLACK_GRACE_SECONDS
         black_since: float | None = None
+        stamps: deque[float] = deque(maxlen=_FPS_SAMPLE_SIZE)
+        warmup_end = time.monotonic() + _FPS_WARMUP_SECONDS
+        low_fps_since: float | None = None
+        low_fps_warned = False
+        reopens_left = _REOPEN_ATTEMPTS
+        size_checked = False   # 首帧只核对一次真实出帧尺寸
+        self._reset_expo_window()   # 曝光 A/B 观察窗口从本轮重新计时
         outcome = "stop"
         try:
             while not self._capture_stop.is_set():
@@ -2112,16 +2741,79 @@ class MainWindow(QMainWindow):
                 if gen != self._recv_generation:
                     outcome = "stop"
                     break
-                if time.monotonic() < grace_end:
-                    if _is_black_frame(frame):
-                        if black_since is None:
-                            black_since = time.monotonic()
-                        elif time.monotonic() - black_since >= _BLACK_CONTINUOUS_SECONDS:
-                            outcome = "blackout"
-                            break
+                # 首帧核对真实出帧尺寸（「报大出小」会让识别率静默变差）
+                if size_checked is False:
+                    size_checked = True
+                    self._check_actual_frame_size(cap, idx, frame)
+                now = time.monotonic()
+                stamps.append(now)
+                if now < grace_end and _is_black_frame(frame):
+                    if black_since is None:
+                        black_since = now
+                    elif now - black_since >= _BLACK_CONTINUOUS_SECONDS:
+                        outcome = "blackout"
+                        break
+                else:
+                    black_since = None
+                # 帧率看门狗：1fps 时 read 仍是 ok=True，只有实测间隔能发现。
+                if now >= warmup_end and len(stamps) >= _FPS_MIN_SAMPLES:
+                    span = stamps[-1] - stamps[0]
+                    fps = (len(stamps) - 1) / span if span > 0 else 0.0
+                    if fps < _MIN_FPS:
+                        if low_fps_since is None:
+                            low_fps_since = now
+                        elif now - low_fps_since >= _LOW_FPS_SECONDS:
+                            if reopens_left <= 0:
+                                # 重开无效：极低帧率（1fps 状态）停机顺延；2~5fps 只提示一次，
+                                # 继续以低速接收——慢总比直接中断好。
+                                if fps < _CRITICAL_FPS:
+                                    outcome = "slow"
+                                    break
+                                if not low_fps_warned:
+                                    low_fps_warned = True
+                                    self._capture_status.emit(
+                                        f"设备 {idx} 帧率偏低（{fps:.1f} fps），继续接收")
+                                low_fps_since = None
+                                # 不 continue：这一帧照常投递，只是不再重复提示
+                            else:
+                                reopens_left -= 1
+                                # 分辨率优先有代价：USB 2.0 口/弱驱动能"报"1080p 却只出
+                                # 3~5fps。此时先把采集档位降一档（1080p→720p）再重开，
+                                # 而不是原样重开同档——否则重开多少次都还是低帧率。
+                                downgraded = self._downgrade_capture_mode()
+                                self._capture_status.emit(
+                                    f"设备 {idx} 帧率过低（{fps:.1f} fps），"
+                                    + ("降低采集分辨率后重开…" if downgraded else "正在重开…"))
+                                cap.release()
+                                cap = self._reopen_camera(idx, backend, gen)
+                                if cap is None:
+                                    # 重开失败可能是"已请求停止/代际过期"，别误报成帧率问题
+                                    outcome = ("stop" if (gen != self._recv_generation
+                                                          or self._capture_stop.is_set())
+                                               else "slow")
+                                    break
+                                if gen != self._recv_generation or self._capture_stop.is_set():
+                                    cap.release()
+                                    outcome = "stop"
+                                    break
+                                self._cap = cap
+                                stamps.clear()
+                                low_fps_since = None
+                                low_fps_warned = False
+                                warmup_end = time.monotonic() + _FPS_WARMUP_SECONDS
+                                grace_end = time.monotonic() + _BLACK_GRACE_SECONDS
+                                continue
                     else:
-                        black_since = None
+                        low_fps_since = None
                 self._frame_ready.emit(frame)
+                # 曝光自寻优：拍屏丢帧的主因不是模糊，而是「曝光窗口横跨屏幕换码瞬间」
+                # 产生的撕裂帧（上半旧码/下半新码），像素再多也解不出。缩短曝光能大幅
+                # 降低此概率。这里不猜——实测 4 秒识别率做 A/B，只有确实变好才保留，
+                # 否则重开设备恢复自动曝光。
+                expo_outcome = self._expo_step(cap, frame)
+                if expo_outcome == "revert":
+                    outcome = "expo_revert"
+                    break
                 # 投递到"只保留最新一帧"的槽位：槽满说明解码慢，丢旧帧投新帧
                 q = self._decode_queue
                 if q is not None:
@@ -2135,15 +2827,98 @@ class MainWindow(QMainWindow):
                     except queue.Full:
                         pass
         finally:
-            cap.release()
+            if cap is not None:   # 重开失败时 cap 已被置 None（旧句柄已在重开前释放）
+                cap.release()
             if gen == self._recv_generation:
                 self._cap = None   # 仅当前代线程允许清除活跃标记（旧代线程不得误清新会话的 cap）
         return outcome
+
+    def _expo_step(self, cap, frame) -> str | None:
+        """曝光 A/B 自寻优状态机：基线 → 试短曝光 → 保留或回退（返回 "revert"）。
+
+        只统计「本帧是否解出了码」——这正是撕裂帧的直接表征，与取景大小无关，
+        所以不受用户距离变化干扰。样本不足或驱动不支持时安静跳过，绝不打扰用户。
+        """
+        if self._expo_state == "off":
+            return None
+        pipe = self._pipe
+        if pipe is None:
+            return None
+        missed = getattr(pipe, "missed_images", 0)
+        # 用 missed_images 的增量判断本帧是否解出（解码在工作线程，稍滞后也够用）
+        clean = missed == self._expo_last_missed
+        self._expo_last_missed = missed
+        self._expo_frames += 1
+        if clean:
+            self._expo_clean += 1
+        now = time.monotonic()
+        if now - self._expo_t0 < _EXPO_WINDOW_SECONDS or self._expo_frames < _EXPO_MIN_FRAMES:
+            return None
+        rate = self._expo_clean / max(1, self._expo_frames)
+        if self._expo_state == "baseline":
+            if rate >= 0.95:
+                self._expo_state = "off"      # 几乎不丢帧，没有优化空间
+                return None
+            if not self._try_short_exposure(cap):
+                self._expo_state = "off"      # 驱动不支持手动曝光
+                return None
+            self._expo_base_rate = rate
+            self._expo_state = "trying"
+            self._reset_expo_window()
+            self._capture_status.emit(f"尝试缩短曝光以降低撕裂帧（当前识别率 {rate:.0%}）…")
+            return None
+        # trying：与基线比较，提升不足 8% 视为无效
+        if rate > self._expo_base_rate * 1.08:
+            self._expo_state = "off"
+            self._capture_status.emit(
+                f"已启用短曝光：识别率 {self._expo_base_rate:.0%} → {rate:.0%}")
+            return None
+        self._expo_state = "off"
+        self._capture_status.emit(
+            f"短曝光无改善（{self._expo_base_rate:.0%} → {rate:.0%}），恢复自动曝光")
+        return "revert"
+
+    def _try_short_exposure(self, cap) -> bool:
+        """把手动曝光调到约 1/100s；失败（驱动不支持）返回 False。
+
+        DSHOW 用 0.25 表示手动、-log2(秒) 表示曝光值；MSMF 用 0/1。两套都试一遍，
+        以回读是否真的变小为准——很多内置摄像头只支持自动曝光，此时直接放弃。
+        """
+        try:
+            before = float(cap.get(cv2.CAP_PROP_EXPOSURE) or 0)
+            for auto_val, manual_val in ((0.25, -7.0), (0.0, -7.0)):
+                try:
+                    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, auto_val)
+                    ok = cap.set(cv2.CAP_PROP_EXPOSURE, manual_val)
+                except Exception:  # noqa: BLE001, S110 — 个别驱动直接抛，换下一套参数
+                    pass
+                else:
+                    after = float(cap.get(cv2.CAP_PROP_EXPOSURE) or 0)
+                    if ok and after != before and after != 0:
+                        return True
+        except Exception:  # noqa: BLE001 — 不支持就当没有这项能力
+            return False
+        return False
+
+    def _reset_expo_window(self) -> None:
+        self._expo_t0 = time.monotonic()
+        self._expo_frames = 0
+        self._expo_clean = 0
+        self._expo_last_missed = getattr(self._pipe, "missed_images", 0)
+
+    def _reopen_camera(self, idx: int, backend: str, gen: int):
+        """原地重开设备并重刷链路参数；失败返回 None。"""
+        cap = self._open_usable_camera(idx, backend, gen)
+        if cap is None:
+            return None
+        self._apply_capture_settings(cap, backend)
+        return cap
 
     def _on_frame_ready(self, frame):
         """UI 线程：采集线程送来的最新帧，刷新预览（接收已停止时直接忽略）。"""
         if self._capture_thread is None or self._pipe is None:
             return
+        self._last_raw_frame = frame   # 「保存画面」/失败样本留存取这一帧
         pix = QPixmap.fromImage(_qimage_from_cv(frame))
         self._cam_label.setPixmap(pix.scaled(self._cam_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
