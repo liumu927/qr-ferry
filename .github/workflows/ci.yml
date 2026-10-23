@@ -130,35 +130,21 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
-          pip install pyinstaller
-          # 打包用 headless opencv 省体积（qrferry 仅用采集/处理，不用 imshow/waitKey）
-          pip uninstall -y opencv-python
-          pip install opencv-python-headless
-      # 裁剪未用的 PySide6 大模块 + headless opencv，显著缩小 zip。
-      # shell: bash —— windows-latest 默认 pwsh 不认 `\` 续行，改用 git bash。
+          pip install -r requirements.txt   # 已含 pyinstaller==6.21.0
+          # 打包用 headless opencv 省体积（qrferry 仅用采集/处理，不用 imshow/waitKey）。
+          # 注意：这是相对 requirements.txt 的**有意偏离**——headless 与 full 是
+          # 不同构建的 cv2 二进制，而 requirements.txt 记录过「同版本号不同构建导致
+          # 目标机摄像头枚举行为/耗时变化」的教训。发版前须在真机上复核一次摄像头
+          # 枚举与采集，不能只信本地（本地是 full 构建）跑通。
+      # 打包参数统一由 qr-ferry.spec 持有（本地与 CI 同一条命令），避免两处
+      # exclude 清单各改各的而悄悄漂移。
       - name: Build with PyInstaller
-        shell: bash
-        run: |
-          pyinstaller --noconfirm --windowed --name qr-ferry --paths src \
-            --collect-all segno --collect-all zxingcpp \
-            --exclude-module PySide6.QtQml --exclude-module PySide6.QtQuick \
-            --exclude-module PySide6.QtQuickWidgets --exclude-module PySide6.QtQuick3D \
-            --exclude-module PySide6.QtWebEngineCore --exclude-module PySide6.QtWebEngineWidgets \
-            --exclude-module PySide6.QtWebEngineQuick --exclude-module PySide6.QtWebChannel \
-            --exclude-module PySide6.QtWebSockets --exclude-module PySide6.QtMultimedia \
-            --exclude-module PySide6.QtMultimediaWidgets --exclude-module PySide6.QtNetwork \
-            --exclude-module PySide6.QtSql --exclude-module PySide6.QtTest \
-            --exclude-module PySide6.QtDesigner --exclude-module PySide6.QtCharts \
-            --exclude-module PySide6.QtDataVisualization --exclude-module PySide6.Qt3DCore \
-            --exclude-module PySide6.Qt3DRender --exclude-module PySide6.QtPdf \
-            --exclude-module PySide6.QtBluetooth --exclude-module PySide6.QtNfc \
-            --exclude-module PySide6.QtPositioning --exclude-module PySide6.QtSensors \
-            --exclude-module PySide6.QtSerialPort \
-            scripts/run_app.py
+        run: pyinstaller --noconfirm --clean qr-ferry.spec
+      # 版本号三处一致（pyproject / qrferry.__version__ / tag）才产出，否则拒绝，
+      # 防止打出文件名与程序自报版本不符的错标包。
       - name: Package zip
-        run: Compress-Archive -Path dist\qr-ferry -DestinationPath qr-ferry-${{ github.ref_name }}-windows-x64.zip
+        run: python scripts/pack_windows_zip.py "${{ github.ref_name }}"
       - name: Upload to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" "qr-ferry-${{ github.ref_name }}-windows-x64.zip" --clobber
+        run: gh release upload "${{ github.ref_name }}" "dist\qr-ferry-${{ github.ref_name }}-windows-x64.zip" --clobber

@@ -154,6 +154,22 @@ cd android
 - `tools/qr_loopback_bench.py`：标准 QR 参数寻优基准，仿真"屏幕 → 相机"链路（时间混帧 / 模糊 / 噪声），比较帧长 × 纠错级 × 帧率 × 相机曝光组合的有效吞吐估计。
 - Android `protocol` 模块：`Crc32GoldenTest` / `FrameCodecTest` / `LtDecoderTest` / `LtEncoderTest` / `ReceiveSessionTest`，与 PC fixtures 逐字节对照。
 
+## 打包（Windows exe）
+
+产物是 **onedir** 形态（`qr-ferry.exe` + 同目录 `_internal/`），不是单文件 exe——整包分发解压后双击运行。
+
+```powershell
+.venvScriptspyinstaller.exe --noconfirm --clean qr-ferry.spec
+.venvScriptspython.exe scriptspack_windows_zip.py     # 可传 tag：pack_windows_zip.py v0.1.29
+```
+
+产出 `dist/qr-ferry-v<版本>-windows-x64.zip`（约 113 MB / 331 个文件）。
+
+- **打包参数只在 `qr-ferry.spec` 里维护**：PyInstaller 命令、`segno`/`zxingcpp` 的 `collect_all`、以及排除掉的 25 个未用 Qt 模块（QtWebEngine / QtMultimedia / QtQuick …，这是体积从 300 MB+ 降到 113 MB 的原因）。本地与 CI 跑的是同一条命令，不要在别处另写一份 exclude 清单。
+- **版本号三处必须一致**：`pyproject.toml`、`src/qrferry/__init__.py`（窗口/托盘自报的就是它）、git tag。`pack_windows_zip.py` 会校验，不一致直接拒绝产出，避免打出文件名与程序自报版本不符的错标包。
+- **CI**：推送 `v*` tag 时 `release-pc` job 在 `windows-latest` 上自动打包并附到同一个 GitHub Release（与 Android APK 并列）。所以正常情况下**本地不需要打包**——云端产物直接进 Release，不会回到本地 `dist/`。
+- `upx` 不在 PATH 时 spec 里的 `upx=True` 会静默退化为不压缩，不影响功能，装 UPX 可再显著缩小体积。
+
 ## 排障：识别不稳 / 速度上不去
 
 拍屏链路的吞吐由**三个独立的量**决定，任何一个不满足都表现为「扫不出」或「很慢」。排障时按下面顺序看，不要一上来就降帧长。
