@@ -7,6 +7,9 @@ __pycache__/
 build/
 dist/
 *.spec
+# 上面忽略的是 PyInstaller 由 CLI 参数自动生成的 spec；qr-ferry.spec 是手写维护的
+# 打包唯一真相源（CI 与本地都跑它），必须入库。
+!qr-ferry.spec
 
 # 虚拟环境
 .venv/
