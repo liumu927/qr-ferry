@@ -10,8 +10,8 @@ jobs:
   python:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: pip
@@ -31,12 +31,17 @@ jobs:
   android:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+      # 显式指定 packages：action 默认要装 'tools'，但该包已从新版 SDK 仓库移除，
+      # 会导致 sdkmanager 报 "Failed to find package 'tools'" 并 exit 1。
+      # platform-tools 足够；platforms/build-tools 由 AGP 按需下载。
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - name: Protocol JVM tests
         run: cd android && ./gradlew :protocol:test --no-daemon --console=plain
       - name: Build debug APK
@@ -51,12 +56,17 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+      # 显式指定 packages：action 默认要装 'tools'，但该包已从新版 SDK 仓库移除，
+      # 会导致 sdkmanager 报 "Failed to find package 'tools'" 并 exit 1。
+      # platform-tools 足够；platforms/build-tools 由 AGP 按需下载。
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       # 从 base64 Secret 还原 keystore（不入库），路径与本地 keystore.properties 一致。
       - name: Decode keystore from secret
@@ -114,8 +124,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install dependencies
