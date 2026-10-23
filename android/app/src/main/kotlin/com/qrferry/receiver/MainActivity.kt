@@ -89,7 +89,7 @@ class MainActivity : AppCompatActivity() {
     // 发送参数下拉选中项（AutoCompleteTextView 无 selectedItemPosition，改用字段保存）
     private var codecPosition = 0
     private var fpsPosition = FPS_OPTIONS.indexOf(DEFAULT_FPS)
-    private var frameBytesPosition = 0
+    private var frameBytesPosition = FRAME_BYTES_OPTIONS.indexOf(DEFAULT_FRAME_BYTES).coerceAtLeast(0)
     private var ecPosition = 0
 
     private val scanner = BarcodeScanning.getClient(
@@ -176,7 +176,8 @@ class MainActivity : AppCompatActivity() {
                     "· 设备不限：电脑与电脑、手机与手机、电脑与手机都可以互传；\n" +
                     "· 二维码与摄像头保持 15~30cm，光线均匀、对焦清晰成功率最高；\n" +
                     "· 发送较慢时调低帧率（如 8 FPS）更稳，调高帧率（如 24/30）更快；\n" +
-                    "· 摄像头分辨率较低、识别不稳时，把帧长调低（如 700B）更容易识别；\n" +
+                    "· 默认帧长 1200B + 12fps；追求更快可上调到 2200B（需接收端跑 60fps），\n" +
+                    "  对方摄像头较旧扫不出则降到 700B；\n" +
                     "· 传输中断可重新点「开始发送/接收」，已收到的部分会自动续传；\n" +
                     "· 发送时屏幕会保持常亮，结束后自动恢复。"
             )
@@ -189,11 +190,12 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle("参数说明")
             .setMessage(
-                "码制：标准 QR 兼容性最好、推荐使用；彩色码是实验功能，需要接收端也选「彩色码」。\n\n" +
+                "码制：当前版本固定使用标准 QR（兼容性最好）。彩色码为实验功能，因尚未通过验证暂不提供。\n\n" +
                     "帧率：每秒显示多少张二维码。越高传得越快，但码切换太快容易扫不准；" +
                     "扫不稳时调低（如 8 FPS）更稳。\n\n" +
-                    "帧长：每张二维码携带的数据量。摄像头分辨率低、扫不清时选 700B 更易识别；" +
-                    "设备好可选 1200/2200B 传得更快。\n\n" +
+                    "帧长：每张二维码携带的数据量。默认 1200B，兼顾速度与兼容性。\n" +
+                    "接收端采集能跑 60fps 时（曝光 ≤16.7ms，画面不撕裂）可上调到 2200B，吞吐约为 700B 的 2.6 倍；\n" +
+                    "若对方只支持 30fps 或摄像头较旧扫不出，请降到 700B。\n\n" +
                     "纠错：二维码的容错等级。越高越耐遮挡、模糊，但码点更密、更难扫；" +
                     "一般用 L 或 M 即可。"
             )
@@ -203,12 +205,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupSendUi() {
         // 四个下拉框：ExposedDropdownMenu（AutoCompleteTextView），选中项存字段
-        val codecOptions = listOf("标准QR（推荐）", "彩色码（实验）")
+        // 彩色码（实验）未通过真机验证，暂不从界面暴露。
+        // 底层实现（ColorMatrixRenderer、isColorSend 分支、帧长锁定）完整保留，
+        // 验证通过后把 "彩色码（实验）" 加回 CODEC_OPTIONS 即可恢复。
+        val codecOptions = CODEC_OPTIONS
         binding.sendCodecInput.setAdapter(
             ArrayAdapter(this, android.R.layout.simple_list_item_1, codecOptions))
         binding.sendCodecInput.setText(codecOptions[codecPosition], false)
+        // 只有一个码制时禁用下拉：可点开却无其它选项会让人以为界面坏了
+        binding.sendCodecInput.isEnabled = codecOptions.size > 1
         binding.sendCodecInput.setOnItemClickListener { _, _, position, _ ->
             codecPosition = position
+            refreshFrameBytesForCodec()
             refreshSendEnabled()
         }
 
@@ -289,6 +297,7 @@ class MainActivity : AppCompatActivity() {
         }
         binding.btnStartSend.setOnClickListener { toggleSending() }
         showSendMode(true)   // 默认进入发送页
+        applyDefaultSendParams()   // 仅此处套默认值；停止发送/选文件不再重置
         refreshSendTypeUi()
         refreshSendEnabled()
     }
@@ -311,6 +320,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** 彩色码（实验）走固定帧长，此时把下拉框禁用并显示真实值；
+     *  切回标准 QR 恢复用户原先选择——否则「显示 2200B、实际发 720B」会误导排障。 */
+    private fun refreshFrameBytesForCodec() {
+        if (isColorSend()) {
+            binding.sendFrameBytesInput.isEnabled = false
+            binding.sendFrameBytesInput.setText(
+                "帧长 ${LtEncoder.DEFAULT_MAX_FRAME_BYTES} B（彩色码固定）", false)
+        } else {
+            binding.sendFrameBytesInput.isEnabled = !sending
+            binding.sendFrameBytesInput.setText(
+                "帧长 ${FRAME_BYTES_OPTIONS[frameBytesPosition]} B", false)
+        }
+    }
+
     private fun refreshSendTypeUi() {
         val fileMode = isFileMode()
         binding.sendTextInput.visibility = if (fileMode) View.GONE else View.VISIBLE
@@ -318,6 +341,9 @@ class MainActivity : AppCompatActivity() {
         binding.sendFileInfo.visibility = if (fileMode) View.VISIBLE else View.GONE
         binding.sendOptimizeCheck.visibility = if (fileMode) View.VISIBLE else View.GONE
         binding.btnOptimizeInfo.visibility = if (fileMode) View.VISIBLE else View.GONE
+        // 左列容器必须一起隐藏：只隐藏子控件时容器仍按 weight=1 占掉左半宽，
+        // 「二维码全屏展示」会被挤到右半区、左边空一大块（看起来像悬在中间）。
+        binding.optimizeGroup.visibility = if (fileMode) View.VISIBLE else View.GONE
         // 文件模式：两行按钮（选择文件/清空 + 开始发送）；
         // 文本模式：一行（清空内容/开始发送）
         // 注：发送端无断点续传，勿再添加「恢复发送」类按钮（PC 端续传已并入开始发送）
@@ -325,17 +351,22 @@ class MainActivity : AppCompatActivity() {
         binding.fileButtonsRow2.visibility = if (fileMode) View.VISIBLE else View.GONE
         binding.textButtonsRow.visibility = if (fileMode) View.GONE else View.VISIBLE
         binding.btnPickFile.isEnabled = !sending
-        // 文本/文件切换时联动帧长/fps 默认（仅非发送中，避免覆盖用户手调）：
-        // 文本 700B/8fps、文件 2200B/8fps —— 实测稳定工作点
-        if (!sending) {
-            val defaultBytes = if (fileMode) 2200 else 700
-            val defaultBytesIdx = FRAME_BYTES_OPTIONS.indexOf(defaultBytes).coerceAtLeast(0)
-            frameBytesPosition = defaultBytesIdx
-            binding.sendFrameBytesInput.setText("帧长 ${FRAME_BYTES_OPTIONS[defaultBytesIdx]} B", false)
-            val defaultFpsIdx = FPS_OPTIONS.indexOf(DEFAULT_FPS).coerceAtLeast(0)
-            fpsPosition = defaultFpsIdx
-            binding.sendFpsInput.setText("${FPS_OPTIONS[defaultFpsIdx]} FPS", false)
-        }
+    }
+
+    /** 首次进入时套用一次默认发送参数（帧长 1200B / 帧率 12fps）。
+     *
+     * 只初始化时调用：此前这段逻辑写在 refreshSendTypeUi() 里，而该函数在「停止发送」
+     * 「选中文件」时都会跑，导致每次停下来参数就被打回默认——用户刚手调的那套参数
+     * 立刻消失，无从确认上次用的是哪组档位。参数属于用户选择，必须持久保留。
+     */
+    private fun applyDefaultSendParams() {
+        val defaultBytesIdx = FRAME_BYTES_OPTIONS.indexOf(DEFAULT_FRAME_BYTES).coerceAtLeast(0)
+        frameBytesPosition = defaultBytesIdx
+        binding.sendFrameBytesInput.setText(
+            "帧长 ${FRAME_BYTES_OPTIONS[defaultBytesIdx]} B", false)
+        val defaultFpsIdx = FPS_OPTIONS.indexOf(DEFAULT_FPS).coerceAtLeast(0)
+        fpsPosition = defaultFpsIdx
+        binding.sendFpsInput.setText("${FPS_OPTIONS[defaultFpsIdx]} FPS", false)
     }
 
     private fun toggleSending() {
@@ -476,9 +507,8 @@ class MainActivity : AppCompatActivity() {
         sendHandler.removeCallbacks(sendTick)
         binding.btnStartSend.text = "开始发送"
         binding.btnStartSendText.text = "开始发送"
-        binding.sendCodecInput.isEnabled = true
+        binding.sendCodecInput.isEnabled = CODEC_OPTIONS.size > 1   // 仅一个码制时保持禁用
         binding.sendFpsInput.isEnabled = true
-        binding.sendFrameBytesInput.isEnabled = true
         binding.sendEcInput.isEnabled = true
         binding.sendTypeToggle.isEnabled = true
         binding.sendTextInput.isEnabled = true
@@ -487,6 +517,9 @@ class MainActivity : AppCompatActivity() {
         binding.sendOptimizeCheck.isEnabled = true
         binding.sendFullscreenCheck.isEnabled = true
         binding.sendStatusText.text = message
+        // 帧长下拉的启用状态与显示文本由码制决定（彩色码固定 700B），
+        // 且**不得**在这里重置成默认值——用户刚用的那套参数要保持原样。
+        refreshFrameBytesForCodec()
         refreshSendTypeUi()
         refreshSendEnabled()
     }
@@ -815,8 +848,15 @@ class MainActivity : AppCompatActivity() {
         private const val TAG = "qr-ferry-recv"
         // 帧率档位（精简为 5 档：低帧率稳、高帧率快，中档 10/15/18/20 与相邻档差异不明显）
         private val FPS_OPTIONS = listOf(5, 8, 12, 24, 30)
-        private const val DEFAULT_FPS = 8
+        // 彩色码（实验）未通过真机验证，暂不暴露；恢复时加回 "彩色码（实验）" 即可。
+        private val CODEC_OPTIONS = listOf("标准QR（推荐）")
+        // 默认 12fps：700B 帧长下比 8fps 多 50% 吞吐，同时每张码仍显示 83ms，
+        // 普通摄像头（30fps 采集）约有 2~3 次识别机会，不会因切换过快而扫不稳。
+        private const val DEFAULT_FPS = 12
         private val FRAME_BYTES_OPTIONS = listOf(700, 1200, 2200)
+        // 默认帧长 1200B：折中档——比 700B 快（源块 1024B vs 512B），又不像 2200B 那样
+        // 要求接收端必须跑在 60fps（曝光 ≤16.7ms）才稳。文件与文本共用此默认值。
+        private const val DEFAULT_FRAME_BYTES = 1200
     }
 
     private data class SelectedSendFile(

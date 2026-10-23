@@ -252,7 +252,10 @@
                         android:gravity="center_vertical"
                         android:orientation="horizontal">
 
+                        <!-- 左列容器：文本模式下整列隐藏（子控件隐藏但容器仍占位会把右侧
+                             「二维码全屏展示」挤到半宽处，表现为控件悬在中间、左边空一大片） -->
                         <LinearLayout
+                            android:id="@+id/optimizeGroup"
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
