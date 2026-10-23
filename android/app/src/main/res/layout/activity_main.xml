@@ -205,16 +205,7 @@
                         android:textColorHint="@color/muted"
                         android:textSize="14sp" />
 
-                    <TextView
-                        android:id="@+id/sendMetaText"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:text="0 字符"
-                        android:textColor="@color/muted"
-                        android:textSize="12sp" />
-
-                    <!-- 文件状态 + 就绪提示 同行：左文件名/未选择，右准备/请选择提示 -->
+                    <!-- 文件模式专用：文件名/未选择（文本模式整行折叠） -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
@@ -233,18 +224,10 @@
                             android:text="未选择文件"
                             android:textColor="@color/muted"
                             android:textSize="12sp" />
-
-                        <TextView
-                            android:id="@+id/sendReadyHint"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:layout_marginStart="8dp"
-                            android:text="准备发送"
-                            android:textColor="@color/accent"
-                            android:textSize="12sp" />
                     </LinearLayout>
 
-                    <!-- 允许有损优化（叹号紧贴文字后）+ 全屏展示：一行两列 1:1 -->
+                    <!-- 一行容纳：左槽（文本模式=字符数 / 文件模式=允许有损优化 ⓘ）
+                         + 就绪提示 + 二维码全屏展示。文本模式把字符数并进来，省掉独立一行。 -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
@@ -252,8 +235,16 @@
                         android:gravity="center_vertical"
                         android:orientation="horizontal">
 
-                        <!-- 左列容器：文本模式下整列隐藏（子控件隐藏但容器仍占位会把右侧
-                             「二维码全屏展示」挤到半宽处，表现为控件悬在中间、左边空一大片） -->
+                        <!-- 左列容器：文本模式下与 sendMetaText 互换（整列隐藏，否则
+                             容器仍按 weight=1 占位，会把右侧勾选挤到半宽处） -->
+                        <TextView
+                            android:id="@+id/sendMetaText"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="0 字符"
+                            android:textColor="@color/muted"
+                            android:textSize="12sp" />
+
                         <LinearLayout
                             android:id="@+id/optimizeGroup"
                             android:layout_width="0dp"
@@ -284,11 +275,24 @@
                                 android:visibility="gone" />
                         </LinearLayout>
 
-                        <com.google.android.material.checkbox.MaterialCheckBox
-                            android:id="@+id/sendFullscreenCheck"
+                        <!-- 与勾选同行，窄屏时优先压缩提示文字而不是挤掉勾选框 -->
+                        <TextView
+                            android:id="@+id/sendReadyHint"
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:layout_weight="1"
+                            android:layout_marginStart="8dp"
+                            android:layout_weight="0.001"
+                            android:ellipsize="end"
+                            android:maxLines="1"
+                            android:text="准备发送"
+                            android:textColor="@color/accent"
+                            android:textSize="11sp" />
+
+                        <com.google.android.material.checkbox.MaterialCheckBox
+                            android:id="@+id/sendFullscreenCheck"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
                             android:checked="true"
                             android:text="二维码全屏展示"
                             android:textColor="@color/ink"

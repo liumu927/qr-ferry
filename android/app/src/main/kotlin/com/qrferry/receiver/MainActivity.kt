@@ -26,6 +26,7 @@ import android.webkit.MimeTypeMap
 import android.graphics.drawable.BitmapDrawable
 import android.widget.ArrayAdapter
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
@@ -88,8 +89,10 @@ class MainActivity : AppCompatActivity() {
     private var sendEcLevel = ErrorCorrectionLevel.L
     // 发送参数下拉选中项（AutoCompleteTextView 无 selectedItemPosition，改用字段保存）
     private var codecPosition = 0
-    private var fpsPosition = FPS_OPTIONS.indexOf(DEFAULT_FPS)
-    private var frameBytesPosition = FRAME_BYTES_OPTIONS.indexOf(DEFAULT_FRAME_BYTES).coerceAtLeast(0)
+    // 上次的发送模式（file/text）；用于识别「模式真的切换了」才套默认参数
+    private var lastSendFileMode: Boolean? = null
+    private var fpsPosition = FPS_OPTIONS.indexOf(DEFAULT_FPS_FILE)
+    private var frameBytesPosition = FRAME_BYTES_OPTIONS.indexOf(DEFAULT_FRAME_BYTES_FILE).coerceAtLeast(0)
     private var ecPosition = 0
 
     private val scanner = BarcodeScanning.getClient(
@@ -338,6 +341,14 @@ class MainActivity : AppCompatActivity() {
         val fileMode = isFileMode()
         binding.sendTextInput.visibility = if (fileMode) View.GONE else View.VISIBLE
         binding.sendMetaText.visibility = if (fileMode) View.GONE else View.VISIBLE
+        // 文本模式：字符数占用弹性宽度把「准备发送/全屏展示」推到右侧；
+        // 文件模式：弹性交给 optimizeGroup（它 weight=1），字符数隐藏。
+        (binding.sendMetaText.layoutParams as LinearLayout.LayoutParams).apply {
+            width = if (fileMode) LinearLayout.LayoutParams.WRAP_CONTENT
+                    else LinearLayout.LayoutParams.MATCH_PARENT
+            weight = if (fileMode) 0f else 1f
+            binding.sendMetaText.layoutParams = this
+        }
         binding.sendFileInfo.visibility = if (fileMode) View.VISIBLE else View.GONE
         binding.sendOptimizeCheck.visibility = if (fileMode) View.VISIBLE else View.GONE
         binding.btnOptimizeInfo.visibility = if (fileMode) View.VISIBLE else View.GONE
@@ -351,20 +362,28 @@ class MainActivity : AppCompatActivity() {
         binding.fileButtonsRow2.visibility = if (fileMode) View.VISIBLE else View.GONE
         binding.textButtonsRow.visibility = if (fileMode) View.GONE else View.VISIBLE
         binding.btnPickFile.isEnabled = !sending
+        // 仅当模式真的切换时套用该模式默认参数（文件 1200B/12fps、文本 700B/8fps）。
+        // 停止发送、选中文件等「同模式刷新」不得重置，否则用户手调的档位会丢失。
+        if (!sending && lastSendFileMode != null && lastSendFileMode != fileMode) {
+            applyDefaultSendParams(fileMode)
+        }
+        lastSendFileMode = fileMode
     }
 
-    /** 首次进入时套用一次默认发送参数（帧长 1200B / 帧率 12fps）。
+    /** 套用当前模式（文件/文本）的默认发送参数。
      *
-     * 只初始化时调用：此前这段逻辑写在 refreshSendTypeUi() 里，而该函数在「停止发送」
-     * 「选中文件」时都会跑，导致每次停下来参数就被打回默认——用户刚手调的那套参数
-     * 立刻消失，无从确认上次用的是哪组档位。参数属于用户选择，必须持久保留。
+     * 触发时机只有两个：首次进入、以及**模式真的发生切换**时。不能挂在每次
+     * refreshSendTypeUi() 上——该函数在「停止发送」「选中文件」时都会跑，
+     * 那样会让用户手调的参数在每次停止后被打回默认，无从确认上次用的档位。
      */
-    private fun applyDefaultSendParams() {
-        val defaultBytesIdx = FRAME_BYTES_OPTIONS.indexOf(DEFAULT_FRAME_BYTES).coerceAtLeast(0)
+    private fun applyDefaultSendParams(fileMode: Boolean = isFileMode()) {
+        val bytes = if (fileMode) DEFAULT_FRAME_BYTES_FILE else DEFAULT_FRAME_BYTES_TEXT
+        val fps = if (fileMode) DEFAULT_FPS_FILE else DEFAULT_FPS_TEXT
+        val defaultBytesIdx = FRAME_BYTES_OPTIONS.indexOf(bytes).coerceAtLeast(0)
         frameBytesPosition = defaultBytesIdx
         binding.sendFrameBytesInput.setText(
             "帧长 ${FRAME_BYTES_OPTIONS[defaultBytesIdx]} B", false)
-        val defaultFpsIdx = FPS_OPTIONS.indexOf(DEFAULT_FPS).coerceAtLeast(0)
+        val defaultFpsIdx = FPS_OPTIONS.indexOf(fps).coerceAtLeast(0)
         fpsPosition = defaultFpsIdx
         binding.sendFpsInput.setText("${FPS_OPTIONS[defaultFpsIdx]} FPS", false)
     }
@@ -481,7 +500,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun selectedFps(): Int =
-        FPS_OPTIONS.getOrElse(fpsPosition) { DEFAULT_FPS }
+        FPS_OPTIONS.getOrElse(fpsPosition) { DEFAULT_FPS_FILE }
 
     private fun selectedFrameBytes(): Int =
         FRAME_BYTES_OPTIONS.getOrElse(frameBytesPosition) {
@@ -626,8 +645,11 @@ class MainActivity : AppCompatActivity() {
                 when {
                     res != null -> {
                         selectedFile = SelectedSendFile(res.filename, res.data)
-                        binding.sendFileInfo.text =
-                            "${raw.name} → ${res.filename}\n${res.description}"
+                        // 文件名相同（OOXML/PNG 重打包通常不改名）时不再输出「A → A」，
+                        // 否则界面上看起来像把文件显示了两遍；只保留优化摘要。
+                        val namePart = if (res.filename == raw.name) raw.name
+                                       else "${raw.name} → ${res.filename}"
+                        binding.sendFileInfo.text = "$namePart · ${res.description}"
                     }
                     failed -> {
                         selectedFile = raw
@@ -850,13 +872,16 @@ class MainActivity : AppCompatActivity() {
         private val FPS_OPTIONS = listOf(5, 8, 12, 24, 30)
         // 彩色码（实验）未通过真机验证，暂不暴露；恢复时加回 "彩色码（实验）" 即可。
         private val CODEC_OPTIONS = listOf("标准QR（推荐）")
-        // 默认 12fps：700B 帧长下比 8fps 多 50% 吞吐，同时每张码仍显示 83ms，
-        // 普通摄像头（30fps 采集）约有 2~3 次识别机会，不会因切换过快而扫不稳。
-        private const val DEFAULT_FPS = 12
         private val FRAME_BYTES_OPTIONS = listOf(700, 1200, 2200)
-        // 默认帧长 1200B：折中档——比 700B 快（源块 1024B vs 512B），又不像 2200B 那样
-        // 要求接收端必须跑在 60fps（曝光 ≤16.7ms）才稳。文件与文本共用此默认值。
-        private const val DEFAULT_FRAME_BYTES = 1200
+        // 默认参数按模式区分——两种用途的瓶颈不同：
+        // · 文件：内容多、希望快，用 1200B/12fps（源块 1024B；12fps 下每张码仍显示
+        //   83ms，30fps 采集有 2~3 次识别机会，不会因切换过快扫不准）。
+        // · 文本：内容通常只有几 KB，K 很小，帧长的收益有限；改用 700B/8fps 码更疏、
+        //   更抗抖动与轻微失焦，扫起来更稳（也更省电）。
+        private const val DEFAULT_FRAME_BYTES_FILE = 1200
+        private const val DEFAULT_FPS_FILE = 12
+        private const val DEFAULT_FRAME_BYTES_TEXT = 700
+        private const val DEFAULT_FPS_TEXT = 8
     }
 
     private data class SelectedSendFile(
