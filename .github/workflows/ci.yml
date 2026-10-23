@@ -5,6 +5,9 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
+  # 手动触发 = release-pc 的预演通道：只构建打包并上传 workflow artifact，
+  # 不创建/不改写 GitHub Release。发版前用它验证 windows-latest 上的打包链路。
+  workflow_dispatch:
 
 jobs:
   python:
@@ -115,11 +118,14 @@ jobs:
             || gh release upload "${{ github.ref_name }}" \
                android/app/build/outputs/apk/release/qr-ferry-${{ github.ref_name }}-android.apk --clobber
 
-  # PC 端 Windows 可执行包（PyInstaller）：tag 触发，与 Android 同一 Release。
-  # needs release 确保 Release 已创建，PC 仅 upload 追加 zip，避免竞态。
+  # PC 端 Windows 可执行包（PyInstaller）。
+  # · 推 v* tag：与 Android 同一 Release，needs release 确保 Release 已创建后仅
+  #   upload 追加 zip，避免竞态。
+  # · workflow_dispatch：预演通道，只上传 workflow artifact，不碰 Release。
+  #   always() 保证 dispatch 场景下也能跑（此时 release job 被跳过）。
   release-pc:
     needs: release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: always() && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
     runs-on: windows-latest
     permissions:
       contents: write
@@ -127,26 +133,34 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.12.7'   # 钉死补丁版本：本地 .venv（Anaconda 3.12.7）与打包产物必须同运行时，否则本地验真包与线上发布包不是同一份
+          python-version: '3.12.7'   # 与本地 .venv 同补丁版本，本地验真包才等于发布包
+      # 曾在此把 opencv-python 换成 opencv-python-headless 省体积。实测两者装出的
+      # cv2.pyd 是同一二进制（sha256[:16]=eefedf6ee006a84b），替换近乎无操作，
+      # 已移除，避免注释与实际命令不符。
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt   # 已含 pyinstaller==6.21.0
-          # 打包用 headless opencv（qrferry 只用 videoio/imgproc，不用 imshow/waitKey）。
-          # 实测：opencv-python 5.0.0.93 的 full 与 headless 装出的 cv2.pyd 二进制
-          # 完全相同（sha256[:16]=eefedf6ee006a84b，即 requirements.txt 记的指纹），
-          # 所以这步对 cv2 行为无影响，只省掉少量 GUI 依赖。
-          # 真正与本地不同源的是 Python 补丁版本：CI 的 setup-python 取到最新的
-          # 3.12.x，本地 .venv 是 3.12.7（实测线上包内 python312.dll=3.12.10）。
-          # 版本要严格一致时，把 venv 补到与 CI 相同的补丁版本再比对。
+        run: pip install -r requirements.txt   # 已含 pyinstaller==6.21.0
       # 打包参数统一由 qr-ferry.spec 持有（本地与 CI 同一条命令），避免两处
       # exclude 清单各改各的而悄悄漂移。
       - name: Build with PyInstaller
         run: pyinstaller --noconfirm --clean qr-ferry.spec
       # 版本号三处一致（pyproject / qrferry.__version__ / tag）才产出，否则拒绝，
-      # 防止打出文件名与程序自报版本不符的错标包。
+      # 防止打出文件名与程序自报版本不符的错标包。预演时无 tag，按 pyproject 命名。
       - name: Package zip
-        run: python scripts/pack_windows_zip.py "${{ github.ref_name }}"
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            python scripts/pack_windows_zip.py "${GITHUB_REF_NAME}"
+          else
+            python scripts/pack_windows_zip.py
+          fi
       - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" "dist\qr-ferry-${{ github.ref_name }}-windows-x64.zip" --clobber
+        run: gh release upload "${{ github.ref_name }}" "dist/qr-ferry-${{ github.ref_name }}-windows-x64.zip" --clobber
+      - name: Upload artifact (dry run)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: qr-ferry-windows-x64
+          path: dist/qr-ferry-v*-windows-x64.zip
